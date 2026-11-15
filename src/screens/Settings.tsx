@@ -310,6 +310,18 @@ export function SettingsScreen() {
         <Row label="Hotkey" hint="Opens the study overlay from any app. Pressing it again hides it.">
           <HotkeyRecorder value={s.hotkey} onSave={async (hotkey) => void (await save({ ...s, hotkey }))} />
         </Row>
+        <Row label="Size" hint="On top of the size it takes by itself, which follows the screen it opens on.">
+          <Choice
+            label="Overlay size"
+            value={s.overlaySize ?? 'normal'}
+            onChange={(v) => patch({ overlaySize: v })}
+            options={[
+              ['small', 'small'],
+              ['normal', 'normal'],
+              ['large', 'large'],
+            ]}
+          />
+        </Row>
         <Row label="Hide when I click away">
           <Switch label="Hide when I click away" on={s.overlayHideOnBlur} onChange={(v) => patch({ overlayHideOnBlur: v })} />
         </Row>

@@ -17,7 +17,8 @@ html.overlay body {
 }
 .ov__panel {
   position: relative;
-  height: 100%;
+  /* As tall as its content; the window is sized to match (Overlay.tsx). */
+  max-height: 100%;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -502,7 +503,7 @@ html.overlay body {
   line-height: 1.45;
 }
 .ov__embed .fc-flip__inner {
-  max-height: 150px;
+  max-height: 220px;
 }
 .ov__embed .fc-flip__face {
   padding-top: 26px;
@@ -510,7 +511,7 @@ html.overlay body {
   scrollbar-width: thin;
 }
 .ov__embed .fc-prompt {
-  max-height: 120px;
+  max-height: 180px;
   overflow-y: auto;
   scrollbar-width: thin;
 }

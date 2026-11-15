@@ -13,6 +13,10 @@
 // with the panel still invisible and sends "overlay-open"; on "overlay-close"
 // the panel plays its exit and, once a frame without it has been painted,
 // tells Rust the window can go. So every show starts from an empty frame.
+//
+// The window is as tall as the panel's content (useFitWindow): Rust zooms it
+// for the screen it is on and never makes it shorter than that, so nothing
+// in the panel has to be scrolled to.
 
 import { listen } from '@tauri-apps/api/event';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -20,7 +24,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate, useParams } from
 
 import { announceDataChange, useDataVersion } from '@/lib/app/events';
 import { formatHotkey, isMacPlatform } from '@/lib/app/hotkey';
-import { hideOverlay, openMain, overlayClosed, overlayState } from '@/lib/app/native';
+import { hideOverlay, openMain, overlayClosed, overlayFit, overlayState } from '@/lib/app/native';
 import { isPrefKey, studySetFrom, usePref, type OverlayMode } from '@/lib/app/prefs';
 import { useSettings } from '@/lib/app/settings';
 import type { SetSummaryDTO } from '@/lib/flashcards/types';
@@ -38,6 +42,59 @@ const MODES: { id: OverlayMode; route: string; label: string; hint: string }[] =
 ];
 
 const MODE_PATH = /^\/flashcards\/(\d+)\/(cards|write|learn)$/;
+
+/** The .ov padding round the panel, top and bottom together. */
+const FRAME_PAD = 12;
+/** How long a shorter panel has to stay shorter before the window follows. */
+const SHRINK_AFTER_MS = 180;
+
+/**
+ * Tell Rust how tall the panel's content is, whenever that changes. Taller
+ * goes at once (nothing may be cut off); shorter waits a beat, so a step that
+ * swaps one screen for the next does not make the window bounce.
+ */
+function useFitWindow(panelRef: React.RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    let frame = 0;
+    let shrink = 0;
+    let sent = 0;
+    const send = (h: number) => {
+      sent = h;
+      void overlayFit(h).catch(() => {});
+    };
+    const measure = () => {
+      frame = 0;
+      // The panel is as tall as its content until the window holds it back;
+      // then the scrolling part says by how much. offsetHeight, not the
+      // bounding box: the open animation turns and scales the panel.
+      const scroller = panel.querySelector<HTMLElement>('.ov__embed, .ov__body');
+      const hidden = scroller ? Math.max(0, scroller.scrollHeight - scroller.clientHeight) : 0;
+      const h = panel.offsetHeight + hidden + FRAME_PAD + 1;
+      if (h === sent) return;
+      window.clearTimeout(shrink);
+      if (h > sent) send(h);
+      else shrink = window.setTimeout(() => send(h), SHRINK_AFTER_MS);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    const resized = new ResizeObserver(schedule);
+    resized.observe(panel);
+    const changed = new MutationObserver(schedule);
+    changed.observe(panel, { subtree: true, childList: true, characterData: true, attributes: true });
+    window.addEventListener('resize', schedule);
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(shrink);
+      resized.disconnect();
+      changed.disconnect();
+      window.removeEventListener('resize', schedule);
+    };
+  }, [panelRef]);
+}
 
 function WithSetId({ render }: { render: (id: number) => React.ReactNode }) {
   const { id } = useParams();
@@ -69,6 +126,7 @@ function OverlayFrame() {
   const closing = useRef(0);
   const panelRef = useRef<HTMLDivElement>(null);
   const version = useDataVersion();
+  useFitWindow(panelRef);
 
   const setId = studySetFrom(chosenSet, sets ?? []);
 

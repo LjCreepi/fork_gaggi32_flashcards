@@ -15,6 +15,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export type OverlayFront = 'term' | 'definition' | 'mixed';
 export type ThemeChoice = 'system' | 'light' | 'dark';
+export type OverlaySize = 'small' | 'normal' | 'large';
 
 export type Settings = {
   hotkey: string;
@@ -23,6 +24,7 @@ export type Settings = {
   overlayFront: OverlayFront;
   overlayHideOnBlur: boolean;
   overlayTopmostWatch: boolean;
+  overlaySize: OverlaySize;
   reminders: boolean;
   reminderTime: string;
   theme: ThemeChoice;
@@ -60,6 +62,8 @@ export const hideOverlay = () => call<void>('hide_overlay');
 /** The overlay page finished playing close number `gen`: the window may go. */
 export const overlayClosed = (gen: number) => call<void>('overlay_closed', { gen });
 /** [is the overlay up, the latest open/close number] */
+/** The overlay page's content is `height` CSS px tall: Rust sizes the window to it. */
+export const overlayFit = (height: number) => call<void>('overlay_fit', { height });
 export const overlayState = () => call<[boolean, number]>('overlay_state');
 export const showOverlay = () => call<void>('show_overlay');
 export const openMain = (route?: string) => call<void>('open_main', { route: route ?? null });

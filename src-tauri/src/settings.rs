@@ -29,6 +29,8 @@ pub struct Settings {
     pub overlay_front: String,
     pub overlay_hide_on_blur: bool,
     pub overlay_topmost_watch: bool,
+    /// "small" | "normal" | "large", on top of the size that follows the screen.
+    pub overlay_size: String,
     // --- reminders ---
     pub reminders: bool,
     /// "HH:MM", local time.
@@ -60,6 +62,7 @@ impl Default for Settings {
             overlay_front: "term".into(),
             overlay_hide_on_blur: true,
             overlay_topmost_watch: false,
+            overlay_size: "normal".into(),
             reminders: false,
             reminder_time: "18:00".into(),
             theme: "system".into(),
@@ -120,6 +123,7 @@ impl Settings {
         }
         self.overlay_new_cards = self.overlay_new_cards.min(1000);
         self.overlay_front = one_of(&self.overlay_front, &["term", "definition", "mixed"], "term");
+        self.overlay_size = one_of(&self.overlay_size, &["small", "normal", "large"], "normal");
         if !valid_time(&self.reminder_time) {
             self.reminder_time = d.reminder_time;
         }
@@ -187,6 +191,7 @@ mod tests {
             overlay_front: "upside-down".into(),
             reminder_time: "25:99".into(),
             theme: "neon".into(),
+            overlay_size: "huge".into(),
             ai_model: "rm -rf /".into(),
             hotkey: "   ".into(),
             ..Settings::default()
@@ -198,6 +203,7 @@ mod tests {
         assert_eq!(s.overlay_front, "term");
         assert_eq!(s.reminder_time, "18:00");
         assert_eq!(s.theme, "system");
+        assert_eq!(s.overlay_size, "normal");
         assert_eq!(s.ai_model, DEFAULT_MODEL);
         assert_eq!(s.hotkey, DEFAULT_HOTKEY);
     }
@@ -207,6 +213,7 @@ mod tests {
         // and one with fields since removed (dailyGoal) too
         let old: Settings = serde_json::from_str(r#"{"dailyGoal":20,"theme":"dark"}"#).unwrap();
         assert_eq!(old.theme, "dark");
+        assert_eq!(old.overlay_size, "normal");
         let s: Settings = serde_json::from_str(r#"{"hotkey":"Alt+K"}"#).unwrap();
         assert_eq!(s.hotkey, "Alt+K");
         assert_eq!(s.overlay_round, 10);

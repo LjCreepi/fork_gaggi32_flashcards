@@ -16,7 +16,7 @@ use serde_json::{Map, Value as Json};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, State, Url, WebviewUrl,
+    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, State, Url, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_autostart::ManagerExt as _;
@@ -48,6 +48,8 @@ struct AppState {
     /// the next.
     overlay_open: AtomicBool,
     overlay_gen: AtomicU64,
+    /// The overlay page's height and the zoom it is shown at.
+    overlay_geom: Mutex<OverlayGeom>,
     hide_on_blur: AtomicBool,
     topmost_watch: Arc<AtomicBool>,
     http: reqwest::Client,
@@ -87,7 +89,7 @@ fn build_main(app: &AppHandle) -> tauri::Result<WebviewWindow> {
 fn build_overlay(app: &AppHandle) -> tauri::Result<WebviewWindow> {
     WebviewWindowBuilder::new(app, OVERLAY, WebviewUrl::App("overlay.html".into()))
         .title("Flashcards overlay")
-        .inner_size(470.0, 360.0)
+        .inner_size(OVERLAY_W, OVERLAY_H)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -112,21 +114,101 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-/// Centre the overlay on the monitor under the mouse, falling back to the
-/// window's own monitor.
-fn place_overlay(app: &AppHandle, win: &WebviewWindow) {
-    let monitor = app
-        .cursor_position()
+// ---- the overlay's size ------------------------------------------------------
+//
+// The page is laid out OVERLAY_W CSS px wide and tells Rust how tall its
+// content is (overlay_fit). The window is that content times a zoom that
+// follows the screen it opens on, so the panel takes about the same share of
+// a laptop and of a big monitor, and it is never shorter than its content:
+// when the content would not fit the screen at that zoom, the zoom gives way.
+// The webview is zoomed by the same factor, so text, buttons and the card all
+// grow together.
+
+/// The overlay page's width in CSS px (the panel plus the 6 px round it).
+const OVERLAY_W: f64 = 470.0;
+/// Its height until the page has measured itself.
+const OVERLAY_H: f64 = 360.0;
+/// Usable screen height (logical px) at which the overlay is shown at 1:1.
+const OVERLAY_BASE_SCREEN_H: f64 = 820.0;
+/// Share of the usable screen the overlay may take at most.
+const OVERLAY_MAX_SHARE: f64 = 0.9;
+/// Below this the text gets too small to read; past it the panel scrolls.
+const OVERLAY_MIN_ZOOM: f64 = 0.7;
+
+#[derive(Debug, Clone, Copy)]
+struct OverlayGeom {
+    /// The page's content height in CSS px.
+    content_h: f64,
+    /// The zoom the webview was last set to.
+    zoom: f64,
+}
+
+/// Settings > overlay size, as a factor on the screen's own zoom.
+fn size_factor(size: &str) -> f64 {
+    match size {
+        "small" => 0.85,
+        "large" => 1.2,
+        _ => 1.0,
+    }
+}
+
+/// Zoom and logical window size for content `content_h` CSS px tall on a
+/// usable screen area of `area_w` x `area_h` logical px.
+fn overlay_layout(area_w: f64, area_h: f64, factor: f64, content_h: f64) -> (f64, f64, f64) {
+    let auto = (area_h / OVERLAY_BASE_SCREEN_H).clamp(1.0, 1.5);
+    let fits = (area_h * OVERLAY_MAX_SHARE / content_h).min(area_w * OVERLAY_MAX_SHARE / OVERLAY_W);
+    let zoom = (auto * factor).min(fits).max(OVERLAY_MIN_ZOOM);
+    // Two decimals, so a pixel more of content does not re-zoom the page.
+    let zoom = (zoom * 100.0).floor() / 100.0;
+    (zoom, OVERLAY_W * zoom, (content_h * zoom).min(area_h))
+}
+
+fn monitor_under_cursor(app: &AppHandle) -> Option<Monitor> {
+    app.cursor_position()
         .ok()
-        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten());
-    let (Some(m), Ok(size)) = (monitor, win.outer_size()) else {
-        let _ = win.center();
-        return;
+        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+}
+
+/// Size the overlay for its content on the screen it is on, or, with
+/// `place`, move it to the screen under the mouse and centre it there. Without
+/// `place` the top edge stays where it is (the header never jumps) unless
+/// the window would run off the bottom of the screen.
+fn fit_overlay(app: &AppHandle, win: &WebviewWindow, place: bool) {
+    let monitor = if place { monitor_under_cursor(app) } else { None }
+        .or_else(|| win.current_monitor().ok().flatten())
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let Some(m) = monitor else { return };
+    let state = app.state::<AppState>();
+    let factor = size_factor(&state.settings.lock().unwrap().overlay_size);
+    let work = m.work_area();
+    let scale = m.scale_factor();
+    let (ax, ay) = (work.position.x, work.position.y);
+    let (aw, ah) = (work.size.width as i32, work.size.height as i32);
+
+    let mut geom = state.overlay_geom.lock().unwrap();
+    let (zoom, w, h) = overlay_layout(aw as f64 / scale, ah as f64 / scale, factor, geom.content_h);
+    if place {
+        // Onto that screen first: a screen with another scale factor rescales
+        // the window as it arrives, and the size below must come after that.
+        let _ = win.set_position(PhysicalPosition::new(ax, ay));
+    }
+    if (zoom - geom.zoom).abs() > f64::EPSILON {
+        if win.set_zoom(zoom).is_ok() {
+            geom.zoom = zoom;
+        }
+    }
+    drop(geom);
+    // Rounded up, so the page is never a fraction of a pixel short.
+    let (pw, ph) = ((w * scale).round() as i32, (h * scale).ceil() as i32);
+    let _ = win.set_size(PhysicalSize::new(pw as u32, ph as u32));
+
+    let (x, y) = if place {
+        // A little above centre reads as "in front of you" rather than "in the way".
+        (ax + (aw - pw) / 2, ay + (ah - ph) * 2 / 5)
+    } else {
+        let Ok(at) = win.outer_position() else { return };
+        (at.x, at.y.min(ay + ah - ph).max(ay))
     };
-    let (mp, ms) = (m.position(), m.size());
-    let x = mp.x + (ms.width as i32 - size.width as i32) / 2;
-    // A little above centre reads as "in front of you" rather than "in the way".
-    let y = mp.y + (ms.height as i32 - size.height as i32) * 2 / 5;
     let _ = win.set_position(PhysicalPosition::new(x, y));
 }
 
@@ -146,8 +228,11 @@ fn open_overlay(app: &AppHandle) {
     state.overlay_open.store(true, Ordering::SeqCst);
     // Still visible means it is mid-exit: turn it around where it stands.
     if !win.is_visible().unwrap_or(false) {
-        place_overlay(app, &win);
+        fit_overlay(app, &win, true);
         let _ = win.show();
+        // Once more now it is shown: a hidden window can take a new screen's
+        // scale factor only as it appears. The panel is not drawn yet.
+        fit_overlay(app, &win, true);
     }
     let _ = win.set_focus();
     let _ = win.emit("overlay-open", gen);
@@ -473,7 +558,15 @@ fn save_settings(
     settings::store(&app, &next)?;
     state.hide_on_blur.store(next.overlay_hide_on_blur, Ordering::Relaxed);
     state.topmost_watch.store(next.overlay_topmost_watch, Ordering::Relaxed);
+    let resize = next.overlay_size != prev.overlay_size;
     *state.settings.lock().unwrap() = next.clone();
+    if resize {
+        if let Some(win) = app.get_webview_window(OVERLAY) {
+            if win.is_visible().unwrap_or(false) {
+                fit_overlay(&app, &win, false);
+            }
+        }
+    }
     let _ = app.emit("settings-changed", &next);
     Ok(next)
 }
@@ -618,6 +711,22 @@ fn overlay_closed(app: AppHandle, gen: u64) {
     finish_close(&app, gen);
 }
 
+/// The overlay page's content is `height` CSS px tall: size the window to it.
+#[tauri::command]
+fn overlay_fit(app: AppHandle, window: WebviewWindow, height: f64) -> Result<(), String> {
+    if window.label() != OVERLAY {
+        return Err("only the overlay sizes itself".into());
+    }
+    if !height.is_finite() {
+        return Ok(());
+    }
+    app.state::<AppState>().overlay_geom.lock().unwrap().content_h = height.clamp(120.0, 4000.0);
+    if window.is_visible().unwrap_or(false) {
+        fit_overlay(&app, &window, false);
+    }
+    Ok(())
+}
+
 /// For a page that loads after the hotkey: is the overlay up, and since when.
 #[tauri::command]
 fn overlay_state(state: State<'_, AppState>) -> (bool, u64) {
@@ -755,6 +864,7 @@ pub fn run() {
             show_overlay,
             hide_overlay,
             overlay_closed,
+            overlay_fit,
             overlay_state,
             open_main,
             ai_key_status,
@@ -797,6 +907,7 @@ pub fn run() {
                 settings: Mutex::new(prefs.clone()),
                 overlay_open: AtomicBool::new(false),
                 overlay_gen: AtomicU64::new(0),
+                overlay_geom: Mutex::new(OverlayGeom { content_h: OVERLAY_H, zoom: 1.0 }),
                 http: reqwest::Client::builder()
                     .user_agent(concat!("Flashcards/", env!("CARGO_PKG_VERSION")))
                     .https_only(true)
@@ -833,6 +944,40 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_overlay_grows_with_the_screen() {
+        // A laptop at 150 % (1280 x 800 logical, taskbar off): 1:1.
+        let (z, w, h) = overlay_layout(1280.0, 752.0, 1.0, 300.0);
+        assert_eq!((z, w, h), (1.0, 470.0, 300.0));
+        // A 24" 1080p screen at 100 %: about a quarter bigger.
+        let (z, w, _) = overlay_layout(1920.0, 1032.0, 1.0, 300.0);
+        assert_eq!(z, 1.25);
+        assert_eq!(w, 587.5);
+        // Never more than 1.5 on its own.
+        assert_eq!(overlay_layout(3840.0, 2100.0, 1.0, 300.0).0, 1.5);
+        // The size setting scales on top of that.
+        assert_eq!(overlay_layout(1920.0, 1032.0, size_factor("large"), 300.0).0, 1.51);
+        assert_eq!(overlay_layout(1280.0, 752.0, size_factor("small"), 300.0).0, 0.85);
+    }
+
+    #[test]
+    fn the_overlay_is_never_shorter_than_its_content() {
+        // Fits: the window is exactly the content.
+        let (z, _, h) = overlay_layout(1920.0, 1032.0, 1.2, 500.0);
+        assert!(h >= 500.0 * z - 0.001 && h <= 1032.0 * OVERLAY_MAX_SHARE);
+        // Too tall for the screen at that zoom: the zoom gives way, all of it shows.
+        let (z, _, h) = overlay_layout(1280.0, 720.0, 1.0, 700.0);
+        assert!(z < 1.0);
+        assert!((h - 700.0 * z).abs() < 0.001 && h <= 720.0 * OVERLAY_MAX_SHARE);
+        // A narrow screen holds the width back too.
+        let (_, w, _) = overlay_layout(500.0, 900.0, 1.0, 300.0);
+        assert!(w <= 450.0);
+        // Absurdly tall content: the zoom stops at the floor and the window at the screen.
+        let (z, _, h) = overlay_layout(1280.0, 752.0, 1.0, 4000.0);
+        assert_eq!(z, OVERLAY_MIN_ZOOM);
+        assert_eq!(h, 752.0);
+    }
 
     #[test]
     fn old_folders_map_to_the_new_ones() {
