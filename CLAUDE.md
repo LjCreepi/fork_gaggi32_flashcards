@@ -26,6 +26,7 @@ same shape: `C:\dev\dash`, `C:\dev\lingo`.
 ## Conventions
 - Card text only ever goes into SQL as a bound `?` parameter. `db.rs` refuses ATTACH/VACUUM/PRAGMA from the UI.
 - The UI never names a file path or URL for Rust to use: files go through native dialogs in Rust, links through the `open_link` allow-list.
+- User settings live in `settings.rs` (`settings.json`, tmp + rename), never in localStorage: WebView2 drops recent writes when the tray app is killed at a restart. localStorage holds only caches and bookkeeping (theme flash cache, reminder/backup dates) and, for now, study-session snapshots.
 - Schema changes: add `src-tauri/schema/00N_*.sql`, list it in `db.rs` MIGRATIONS and in `src/lib/store/testDb.ts`. Never edit a shipped step.
 - No `window.confirm/prompt` (WKWebView): use `ask` from `src/components/Dialogs.tsx`.
 - Identifier `com.gaggi32.flashcards`. Up to 0.1.6 it was `ch.404canvas.flashcards`: on start, `adopt_old_folders` (lib.rs) renames the old data/webview folders, `ai.rs` moves the key to the new credential name, and `src-tauri/nsis-hooks.nsh` copies the installer's old `Software\404canvas\Flashcards` key to `Software\gaggi32\Flashcards` before the first page (NSIS finds the install to uninstall through `Software\<publisher>\<product>`; hooks are read before the template's `!define`s, so names are spelled out there). Keep those until nobody runs 0.1.6. Never change `bundle.publisher` again without the same kind of carry-over.

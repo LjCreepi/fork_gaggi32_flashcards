@@ -25,7 +25,7 @@ import { MemoryRouter, Route, Routes, useLocation, useNavigate, useParams } from
 import { announceDataChange, useDataVersion } from '@/lib/app/events';
 import { formatHotkey, isMacPlatform } from '@/lib/app/hotkey';
 import { hideOverlay, openMain, overlayClosed, overlayFit, overlayState } from '@/lib/app/native';
-import { isPrefKey, studySetFrom, usePref, type OverlayMode } from '@/lib/app/prefs';
+import { studySetFrom, usePref, type OverlayMode } from '@/lib/app/prefs';
 import { useSettings } from '@/lib/app/settings';
 import type { SetSummaryDTO } from '@/lib/flashcards/types';
 import { asApiError } from '@/lib/store/errors';
@@ -128,7 +128,9 @@ function OverlayFrame() {
   const version = useDataVersion();
   useFitWindow(panelRef);
 
-  const setId = studySetFrom(chosenSet, sets ?? []);
+  // Until the settings arrive, the set and mode are only defaults: the router
+  // waits (a screen opened for the wrong set would start a session there).
+  const setId = settings ? studySetFrom(chosenSet, sets ?? []) : null;
 
   useEffect(() => {
     listSets()
@@ -165,7 +167,7 @@ function OverlayFrame() {
   // hidden: start the screen afresh from what is saved when it opens again.
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key && !isPrefKey(e.key)) stale.current = true;
+      if (e.key) stale.current = true;
     };
     window.addEventListener('storage', onStorage);
     return () => window.removeEventListener('storage', onStorage);
@@ -331,7 +333,7 @@ function OverlayFrame() {
 
         {view === 'add' ? (
           <QuickAdd onDone={() => setView('study')} preferSet={setId} />
-        ) : sets === null ? (
+        ) : sets === null || !settings ? (
           <div className="ov__body ov__center rt-ink-faint">loading…</div>
         ) : setId === null ? (
           <div className="ov__body ov__center">

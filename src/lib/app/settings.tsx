@@ -1,20 +1,23 @@
 // The settings, read once per window and kept current: a save in one window
 // reaches the other through the `settings-changed` event Rust emits.
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
 
 import { onSettingsChanged } from './events';
-import { getSettings, saveSettings, type Settings } from './native';
+import { getSettings, saveSettings, setStudyPref, type Settings, type StudyPrefs } from './native';
 import { applyTheme } from './theme';
 
 type Ctx = {
   settings: Settings | null;
   save: (next: Settings) => Promise<Settings>;
+  /** A study screen's choice: shown at once, kept by Rust. */
+  setPref: <K extends keyof StudyPrefs>(key: K, value: StudyPrefs[K]) => void;
 };
 
 const SettingsContext = createContext<Ctx>({
   settings: null,
   save: async (s) => s,
+  setPref: () => {},
 });
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
@@ -36,7 +39,16 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     return saved;
   };
 
-  return <SettingsContext.Provider value={{ settings, save }}>{children}</SettingsContext.Provider>;
+  const setPref = useCallback(<K extends keyof StudyPrefs>(key: K, value: StudyPrefs[K]) => {
+    setSettings((s) => (s ? { ...s, [key]: value } : s));
+    setStudyPref(key, value)
+      .then(setSettings)
+      .catch(() => {
+        /* not remembered, still applied */
+      });
+  }, []);
+
+  return <SettingsContext.Provider value={{ settings, save, setPref }}>{children}</SettingsContext.Provider>;
 }
 
 export function useSettings(): Ctx {

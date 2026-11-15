@@ -1,5 +1,7 @@
 
-import { useEffect, useRef, useState, type MouseEvent, type RefObject } from 'react';
+import { useEffect, useRef, type MouseEvent, type RefObject } from 'react';
+
+import { usePref } from '@/lib/app/prefs';
 
 /**
  * Put on a button that sits beside a text input. Tapping a button would blur
@@ -11,10 +13,6 @@ export function keepFocus(e: MouseEvent) {
   e.preventDefault();
 }
 
-const SHORTCUTS_STORAGE_KEY = 'flashcards:special-key-shortcuts';
-/** The same choice under the name versions up to 0.1.6 used. */
-const OLD_SHORTCUTS_STORAGE_KEY = '404canvas:flashcards:special-key-shortcuts';
-
 /** The digit that types the button at each position: 1–9, then 0 for the tenth. */
 const SHORTCUT_DIGITS = '1234567890';
 
@@ -23,8 +21,9 @@ const SHORTCUT_DIGITS = '1234567890';
  * text input, at the caret or over the selection.
  *
  * The switch at the end of the row hands the number keys to the first ten
- * buttons. It is off until asked for, and stays a switch rather than a
- * fixture, because while it is on the input cannot take a digit of its own.
+ * buttons. It starts on, is kept with the settings (both windows share it),
+ * and stays a switch rather than a fixture, because while it is on the input
+ * cannot take a digit of its own.
  */
 export function SpecialKeys({
   chars,
@@ -37,7 +36,7 @@ export function SpecialKeys({
   onChange: (value: string) => void;
   inputRef: RefObject<HTMLInputElement | null>;
 }) {
-  const [shortcuts, setShortcuts] = useShortcutsSetting();
+  const [shortcuts, setShortcuts] = usePref('specialKeys');
 
   function insert(char: string) {
     const el = inputRef.current;
@@ -117,31 +116,4 @@ export function SpecialKeys({
       </button>
     </div>
   );
-}
-
-/** Whether the number keys type the special characters; remembered on this device. */
-function useShortcutsSetting(): [boolean, (on: boolean) => void] {
-  // Default to true so 1–9 shortcuts are immediately active and visible.
-  const [on, setOn] = useState(true);
-
-  // Read after mount, so the server's markup and the first render agree.
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(SHORTCUTS_STORAGE_KEY) ?? localStorage.getItem(OLD_SHORTCUTS_STORAGE_KEY);
-      setOn(stored === null ? true : stored === 'on');
-    } catch {
-      // localStorage throws in Safari's private mode; the setting just stays on.
-    }
-  }, []);
-
-  function set(next: boolean) {
-    setOn(next);
-    try {
-      localStorage.setItem(SHORTCUTS_STORAGE_KEY, next ? 'on' : 'off');
-    } catch {
-      // Not remembered, but it still works until the page is left.
-    }
-  }
-
-  return [on, set];
 }

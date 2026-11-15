@@ -24,7 +24,7 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_opener::OpenerExt;
 
-use settings::Settings;
+use settings::{LocalPrefs, Settings, StudyPref};
 
 const MAIN: &str = "main";
 const OVERLAY: &str = "overlay";
@@ -546,8 +546,9 @@ fn save_settings(
     main_only(&window)?;
     let mut next = settings.sanitized();
     let prev = state.settings.lock().unwrap().clone();
-    // Only set_autostart changes this, so a stale copy in the UI can't.
-    next.autostart = prev.autostart;
+    // Only set_autostart and the study commands below change these, so a
+    // stale copy in the UI can't.
+    next.keep_own_fields(&prev);
     if next.hotkey != prev.hotkey {
         if let Err(e) = register_hotkey(&app, &next.hotkey) {
             // Put the old one back so the overlay stays reachable.
@@ -590,6 +591,40 @@ fn set_autostart(
     settings::store(&app, &next)?;
     let _ = app.emit("settings-changed", &next);
     Ok(app.autolaunch().is_enabled().unwrap_or(on))
+}
+
+/// A choice made in a study screen: the overlay's set or mode, the
+/// special-keys switch, the side Flashcards shows first. Both windows have
+/// those screens, so this one is open to the overlay; `StudyPref` can name
+/// nothing else.
+#[tauri::command]
+fn set_study_pref(app: AppHandle, state: State<'_, AppState>, pref: StudyPref) -> Result<Settings, String> {
+    let next = state.settings.lock().unwrap().clone().with(pref);
+    settings::store(&app, &next)?;
+    *state.settings.lock().unwrap() = next.clone();
+    let _ = app.emit("settings-changed", &next);
+    Ok(next)
+}
+
+/// The study choices versions up to 0.1.14 kept in localStorage, handed over
+/// by the main window on its first start with this version (see
+/// `Settings::adopt`).
+#[tauri::command]
+fn adopt_local_prefs(
+    app: AppHandle,
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    prefs: LocalPrefs,
+) -> Result<Settings, String> {
+    main_only(&window)?;
+    let prev = state.settings.lock().unwrap().clone();
+    let next = prev.clone().adopt(prefs);
+    if next != prev {
+        settings::store(&app, &next)?;
+        *state.settings.lock().unwrap() = next.clone();
+        let _ = app.emit("settings-changed", &next);
+    }
+    Ok(next)
 }
 
 /// Release the hotkey while the Settings recorder listens for a new one.
@@ -854,6 +889,8 @@ pub fn run() {
             get_settings,
             save_settings,
             set_autostart,
+            set_study_pref,
+            adopt_local_prefs,
             suspend_hotkey,
             resume_hotkey,
             app_info,

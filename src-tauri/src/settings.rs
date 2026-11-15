@@ -51,6 +51,18 @@ pub struct Settings {
     /// deletes the login item; at launch the app puts it back. None until the
     /// app has first seen what the OS has (files from before this field).
     pub autostart: Option<bool>,
+    // --- study (chosen in the study screens, changed through [`StudyPref`]) ---
+    /// The set the overlay studies; None until one is picked.
+    pub overlay_set: Option<i64>,
+    /// "cards" | "write" | "learn": the overlay's mode.
+    pub overlay_mode: String,
+    /// Whether the number keys type the special characters in Write and Learn.
+    pub special_keys: bool,
+    /// "term" | "definition": the side Flashcards shows first.
+    pub cards_first_side: String,
+    /// Set once the study choices older versions kept in the webview's
+    /// localStorage have been taken over ([`Settings::adopt`]).
+    pub local_prefs_adopted: bool,
 }
 
 impl Default for Settings {
@@ -72,6 +84,11 @@ impl Default for Settings {
             ai_model: DEFAULT_MODEL.into(),
             check_updates: true,
             autostart: None,
+            overlay_set: None,
+            overlay_mode: "cards".into(),
+            special_keys: true,
+            cards_first_side: "term".into(),
+            local_prefs_adopted: false,
         }
     }
 }
@@ -133,8 +150,81 @@ impl Settings {
         if !valid_model(&self.ai_model) {
             self.ai_model = d.ai_model;
         }
+        self.overlay_set = self.overlay_set.filter(|&id| id > 0);
+        self.overlay_mode = one_of(&self.overlay_mode, &["cards", "write", "learn"], "cards");
+        self.cards_first_side = one_of(&self.cards_first_side, &["term", "definition"], "term");
         self
     }
+
+    /// The fields only their own commands change, taken from `prev`, so a
+    /// stale copy of the settings in the Settings screen can't undo them.
+    pub fn keep_own_fields(&mut self, prev: &Settings) {
+        self.autostart = prev.autostart;
+        self.overlay_set = prev.overlay_set;
+        self.overlay_mode = prev.overlay_mode.clone();
+        self.special_keys = prev.special_keys;
+        self.cards_first_side = prev.cards_first_side.clone();
+        self.local_prefs_adopted = prev.local_prefs_adopted;
+    }
+
+    pub fn with(mut self, pref: StudyPref) -> Self {
+        match pref {
+            StudyPref::OverlaySet(id) => self.overlay_set = id,
+            StudyPref::OverlayMode(mode) => self.overlay_mode = mode,
+            StudyPref::SpecialKeys(on) => self.special_keys = on,
+            StudyPref::CardsFirstSide(side) => self.cards_first_side = side,
+        }
+        self.sanitized()
+    }
+
+    /// Takes over the study choices an older version left in localStorage,
+    /// once. A choice this file already has wins: a field is only filled
+    /// while it still holds its default.
+    pub fn adopt(mut self, old: LocalPrefs) -> Self {
+        if self.local_prefs_adopted {
+            return self;
+        }
+        let d = Settings::default();
+        if self.overlay_set.is_none() {
+            self.overlay_set = old.overlay_set;
+        }
+        if let Some(mode) = old.overlay_mode.filter(|_| self.overlay_mode == d.overlay_mode) {
+            self.overlay_mode = mode;
+        }
+        if let Some(on) = old.special_keys.filter(|_| self.special_keys == d.special_keys) {
+            self.special_keys = on;
+        }
+        if let Some(side) = old.cards_first_side.filter(|_| self.cards_first_side == d.cards_first_side) {
+            self.cards_first_side = side;
+        }
+        self.local_prefs_adopted = true;
+        self.sanitized()
+    }
+}
+
+/// One study choice, as the study screens send it: `{"key": .., "value": ..}`.
+/// Both windows make these, so the command that takes them is open to the
+/// overlay, and it can change nothing else.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "key", content = "value", rename_all = "camelCase")]
+pub enum StudyPref {
+    OverlaySet(Option<i64>),
+    OverlayMode(String),
+    SpecialKeys(bool),
+    CardsFirstSide(String),
+}
+
+/// What versions up to 0.1.14 kept in the webview's localStorage, which loses
+/// its newest writes when the webview is killed rather than closed (a restart
+/// with the app in the tray). The main window reads it there and hands it
+/// over once; anything may be missing.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalPrefs {
+    pub overlay_set: Option<i64>,
+    pub overlay_mode: Option<String>,
+    pub special_keys: Option<bool>,
+    pub cards_first_side: Option<String>,
 }
 
 /// Whether the login item should be on at launch.
@@ -243,6 +333,102 @@ mod tests {
         assert!(!autostart_wanted(None, false, false));
         let old: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(old.autostart, None);
+    }
+
+    #[test]
+    fn study_choices_load_check_and_change_one_at_a_time() {
+        let old: Settings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(old.overlay_set, None);
+        assert_eq!(old.overlay_mode, "cards");
+        assert!(old.special_keys);
+        assert_eq!(old.cards_first_side, "term");
+        assert!(!old.local_prefs_adopted);
+
+        let pref = |json: &str| serde_json::from_str::<StudyPref>(json).unwrap();
+        let s = Settings::default()
+            .with(pref(r#"{"key":"overlaySet","value":7}"#))
+            .with(pref(r#"{"key":"overlayMode","value":"learn"}"#))
+            .with(pref(r#"{"key":"specialKeys","value":false}"#))
+            .with(pref(r#"{"key":"cardsFirstSide","value":"definition"}"#));
+        assert_eq!(s.overlay_set, Some(7));
+        assert_eq!(s.overlay_mode, "learn");
+        assert!(!s.special_keys);
+        assert_eq!(s.cards_first_side, "definition");
+        assert_eq!(s.theme, "system");
+        assert_eq!(s.with(pref(r#"{"key":"overlaySet","value":null}"#)).overlay_set, None);
+
+        let s = Settings::default()
+            .with(pref(r#"{"key":"overlaySet","value":-3}"#))
+            .with(pref(r#"{"key":"overlayMode","value":"sideways"}"#))
+            .with(pref(r#"{"key":"cardsFirstSide","value":"back"}"#));
+        assert_eq!(s.overlay_set, None);
+        assert_eq!(s.overlay_mode, "cards");
+        assert_eq!(s.cards_first_side, "term");
+        // Nothing else can be changed this way.
+        assert!(serde_json::from_str::<StudyPref>(r#"{"key":"theme","value":"dark"}"#).is_err());
+        assert!(serde_json::from_str::<StudyPref>(r#"{"key":"specialKeys","value":"on"}"#).is_err());
+    }
+
+    #[test]
+    fn a_settings_save_leaves_the_study_choices_alone() {
+        let prev = Settings {
+            overlay_set: Some(4),
+            overlay_mode: "write".into(),
+            special_keys: false,
+            cards_first_side: "definition".into(),
+            local_prefs_adopted: true,
+            autostart: Some(true),
+            ..Settings::default()
+        };
+        let mut next = Settings { theme: "dark".into(), ..Settings::default() };
+        next.keep_own_fields(&prev);
+        assert_eq!(next, Settings { theme: "dark".into(), ..prev });
+    }
+
+    #[test]
+    fn local_storage_is_taken_over_once_and_never_over_the_file() {
+        let local = || LocalPrefs {
+            overlay_set: Some(3),
+            overlay_mode: Some("write".into()),
+            special_keys: Some(false),
+            cards_first_side: Some("definition".into()),
+        };
+        // A file without the fields: everything comes over.
+        let s = Settings::default().adopt(local());
+        assert_eq!(s.overlay_set, Some(3));
+        assert_eq!(s.overlay_mode, "write");
+        assert!(!s.special_keys);
+        assert_eq!(s.cards_first_side, "definition");
+        assert!(s.local_prefs_adopted);
+
+        // The file already has choices of its own: they stay.
+        let file = Settings {
+            overlay_set: Some(9),
+            overlay_mode: "learn".into(),
+            ..Settings::default()
+        };
+        let s = file.adopt(local());
+        assert_eq!(s.overlay_set, Some(9));
+        assert_eq!(s.overlay_mode, "learn");
+        assert!(!s.special_keys);
+
+        // Only once: a leftover key on a later start changes nothing, even
+        // where the file holds a default the user picked since.
+        let done = Settings::default().adopt(LocalPrefs::default());
+        assert!(done.local_prefs_adopted);
+        assert_eq!(done.clone().adopt(local()), done);
+
+        // Whatever localStorage held is checked like anything else.
+        let junk = LocalPrefs {
+            overlay_set: Some(0),
+            overlay_mode: Some("<script>".into()),
+            ..LocalPrefs::default()
+        };
+        let s = Settings::default().adopt(junk);
+        assert_eq!(s.overlay_set, None);
+        assert_eq!(s.overlay_mode, "cards");
+        let partial: LocalPrefs = serde_json::from_str(r#"{"specialKeys":false}"#).unwrap();
+        assert!(!Settings::default().adopt(partial).special_keys);
     }
 
     #[test]

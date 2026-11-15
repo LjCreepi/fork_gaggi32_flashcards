@@ -11,7 +11,6 @@ import { SetEditor, type EditorPanel } from '@/components/flashcards/SetEditor';
 import { IconCards } from '@/components/flashcards/FlashcardIcons';
 import { latestUpdate, onUpdate } from '@/lib/app/background';
 import { useDataVersion } from '@/lib/app/events';
-import { isPrefKey } from '@/lib/app/prefs';
 import { SettingsProvider, useSettings } from '@/lib/app/settings';
 import type { UpdateInfo } from '@/lib/app/native';
 import { DEFAULT_MODEL } from '@/screens/Settings';
@@ -98,7 +97,7 @@ function PageMotion({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
-      if (e.key && !isPrefKey(e.key)) stale.current = true;
+      if (e.key) stale.current = true;
     };
     const onFocus = () => {
       const studying = /^\/flashcards\/\d+\/(cards|write|learn)$/.test(window.location.hash.slice(1));

@@ -16,6 +16,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 export type OverlayFront = 'term' | 'definition' | 'mixed';
 export type ThemeChoice = 'system' | 'light' | 'dark';
 export type OverlaySize = 'small' | 'normal' | 'large';
+export type OverlayMode = 'cards' | 'write' | 'learn';
 
 export type Settings = {
   hotkey: string;
@@ -35,10 +36,28 @@ export type Settings = {
   checkUpdates: boolean;
   /** Start with the computer; null until the app has read it from the OS. */
   autostart: boolean | null;
+  // Chosen in the study screens and changed through setStudyPref; a save of
+  // the rest leaves them as they are.
+  /** The set the overlay studies; null until one is picked. */
+  overlaySet: number | null;
+  overlayMode: OverlayMode;
+  /** Whether the number keys type the special characters in Write and Learn. */
+  specialKeys: boolean;
+  /** The side Flashcards shows first. */
+  cardsFirstSide: 'term' | 'definition';
+  /** The choices older versions kept in localStorage have been taken over. */
+  localPrefsAdopted: boolean;
 };
+
+export type StudyPrefs = Pick<Settings, 'overlaySet' | 'overlayMode' | 'specialKeys' | 'cardsFirstSide'>;
 
 export const getSettings = () => call<Settings>('get_settings');
 export const saveSettings = (settings: Settings) => call<Settings>('save_settings', { settings });
+/** One study choice; either window may make it. */
+export const setStudyPref = <K extends keyof StudyPrefs>(key: K, value: StudyPrefs[K]) =>
+  call<Settings>('set_study_pref', { pref: { key, value } });
+/** Hands Rust what an older version left in localStorage (main window only, once). */
+export const adoptLocalPrefs = (prefs: Partial<StudyPrefs>) => call<Settings>('adopt_local_prefs', { prefs });
 /** Turns the login item on or off and remembers it; resolves to whether the OS now has it on. */
 export const setAutostart = (on: boolean) => call<boolean>('set_autostart', { on });
 export const suspendHotkey = () => call<void>('suspend_hotkey');

@@ -2,6 +2,7 @@
 import Link from '@/components/Link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { usePref } from '@/lib/app/prefs';
 import {
   currentId,
   mark,
@@ -139,14 +140,7 @@ function Deck({ set }: { set: SetDTO }) {
     return startDeck(allIds(), false);
   });
   const [flipped, setFlipped] = useState(false);
-  const [firstSide, setFirstSide] = useState<'term' | 'definition'>(() => {
-    if (typeof window === 'undefined') return 'term';
-    try {
-      const saved = localStorage.getItem('fc-first-side');
-      if (saved === 'definition' || saved === 'term') return saved;
-    } catch {}
-    return 'term';
-  });
+  const [firstSide, setFirstSide] = usePref('cardsFirstSide');
 
   // Save deck changes to localStorage
   useEffect(() => {
@@ -154,15 +148,9 @@ function Deck({ set }: { set: SetDTO }) {
   }, [deck, set.id]);
 
   const toggleFirstSide = useCallback(() => {
-    setFirstSide((curr) => {
-      const next = curr === 'term' ? 'definition' : 'term';
-      try {
-        localStorage.setItem('fc-first-side', next);
-      } catch {}
-      return next;
-    });
+    setFirstSide(firstSide === 'term' ? 'definition' : 'term');
     setFlipped(false);
-  }, []);
+  }, [firstSide, setFirstSide]);
 
   const total = deck.order.length;
   const atEnd = deck.index === total - 1;
