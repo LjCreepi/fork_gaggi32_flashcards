@@ -578,6 +578,31 @@ export async function getSession(setId: number, mode: StudyMode): Promise<unknow
   }
 }
 
+const sideModeField = z.enum(['write', 'learn']);
+const answerWithField = z.enum(['term', 'definition']);
+
+/** The side Write or Learn last asked for in this set, or null if never. */
+export async function getSide(setId: number, mode: 'write' | 'learn'): Promise<'term' | 'definition' | null> {
+  const [row] = await db().select<{ answer_with: string }>(
+    'SELECT answer_with FROM study_sides WHERE set_id = ? AND mode = ?',
+    [parse(idField, setId), parse(sideModeField, mode)],
+  );
+  const side = answerWithField.safeParse(row?.answer_with);
+  return side.success ? side.data : null;
+}
+
+/** Remembers the side for the next round. A set deleted meanwhile keeps nothing. */
+export async function saveSide(setId: number, mode: 'write' | 'learn', side: 'term' | 'definition'): Promise<void> {
+  await db().batch([
+    {
+      sql: `INSERT INTO study_sides (set_id, mode, answer_with)
+            SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM sets WHERE id = ?1)
+            ON CONFLICT (set_id, mode) DO UPDATE SET answer_with = excluded.answer_with`,
+      params: [parse(idField, setId), parse(sideModeField, mode), parse(answerWithField, side)],
+    },
+  ]);
+}
+
 /** Keeps the round, or with `data` null forgets it. A set deleted meanwhile keeps nothing. */
 export async function saveSession(setId: number, mode: StudyMode, data: unknown): Promise<void> {
   const params = [parse(idField, setId), parse(modeField, mode)];

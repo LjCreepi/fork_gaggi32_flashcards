@@ -8,6 +8,8 @@ import {
   fetchLearnQueue,
   fetchLearnStats,
   loadLearn,
+  loadSide,
+  rememberSide,
   resetLearnProgress,
   reviewCard,
   saveLearn,
@@ -37,6 +39,7 @@ import {
   showHint,
   startLearn,
   summarize,
+  switchSides,
   type LearnSession,
 } from '@/lib/flashcards/learn';
 import type { Quality } from '@/lib/flashcards/sm2';
@@ -50,6 +53,7 @@ import { SetLoadState, useSet } from '@/components/flashcards/useSet';
 import { SpecialKeys, keepFocus } from '@/components/flashcards/SpecialKeys';
 import { StudyArea, StudyHeader, enterIsForFocus } from '@/components/flashcards/StudyHeader';
 import { ResetButton } from '@/components/flashcards/ResetButton';
+import { SwitchSides } from '@/components/flashcards/SwitchSides';
 
 /** How long "correct" stays up before the next card, unless Enter comes first. */
 const CORRECT_PAUSE_MS = 900;
@@ -119,10 +123,12 @@ function LearnMode({ set }: { set: SetDTO }) {
     setLoadError(null);
     setSession(null);
     setSavedSession(null);
-    Promise.all([fetchLearnQueue(set.id), fetchLearnStats(set.id)])
-      .then(async ([queue, stats]) => [queue, stats, await loadLearn(set.id, queue.cards, set.cards)] as const)
-      .then(([queue, stats, saved]) => {
+    Promise.all([fetchLearnQueue(set.id), fetchLearnStats(set.id), loadSide(set.id, 'learn')])
+      .then(async ([queue, stats, side]) => [queue, stats, side, await loadLearn(set.id, queue.cards, set.cards)] as const)
+      .then(([queue, stats, side, saved]) => {
         if (!live) return;
+        // A new session starts on the side this set was last studied with.
+        if (side) setAnswerWith(side);
         streaks.current = new Map(
           queue.cards.map((card) => [card.id, card.progress?.repetitionNumber ?? null]),
         );
@@ -145,6 +151,15 @@ function LearnMode({ set }: { set: SetDTO }) {
   }, [set]);
 
   useEffect(() => load(), [load]);
+
+  const onSwitchSides = useCallback(() => {
+    if (!session) return;
+    const next = switchSides(session);
+    if (next === session) return;
+    setSession(next);
+    setAnswerWith(next.answerWith);
+    rememberSide(set.id, 'learn', next.answerWith);
+  }, [session, set.id]);
 
   // Learn's progress is the set's learned / learning state in the store; the
   // other modes keep their own rounds and are not touched.
@@ -208,6 +223,7 @@ function LearnMode({ set }: { set: SetDTO }) {
         }}
         onStart={() => {
           clearSession(set.id, 'learn');
+          rememberSide(set.id, 'learn', answerWith);
           setSession(startLearn(sessionOrder(today.queue), set.cards, answerWith));
         }}
         onReset={resetLearn}
@@ -237,7 +253,14 @@ function LearnMode({ set }: { set: SetDTO }) {
   }
 
   return (
-    <Play session={session} setSession={setSession} streaks={streaks} onReset={resetLearn} key={session.index} />
+    <Play
+      session={session}
+      setSession={setSession}
+      streaks={streaks}
+      onSwitchSides={onSwitchSides}
+      onReset={resetLearn}
+      key={`${session.index}:${session.answerWith}`}
+    />
   );
 }
 
@@ -376,11 +399,14 @@ function Play({
   session,
   setSession,
   streaks,
+  onSwitchSides,
   onReset,
 }: {
   session: LearnSession;
   setSession: React.Dispatch<React.SetStateAction<LearnSession | null>>;
   streaks: React.RefObject<Streaks>;
+  /** Answer with the other side from this card on. */
+  onSwitchSides: () => void;
   onReset: () => Promise<void>;
 }) {
   const [text, setText] = useState('');
@@ -590,6 +616,7 @@ function Play({
             stop
           </button>
         )}
+        <SwitchSides answerWith={answerWith} enabled={step.kind === 'ask'} onSwitch={onSwitchSides} />
         <ResetButton question="reset learn progress?" title={LEARN_RESET_TITLE} onReset={onReset} />
       </div>
 

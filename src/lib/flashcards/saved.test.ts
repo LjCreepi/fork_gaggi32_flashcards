@@ -490,3 +490,23 @@ describe('reading 0.1.14 snapshots', () => {
     expect(snap.keys.sort()).toEqual(['fc-session-5', 'fc-session-5-2026-10-09']);
   });
 });
+
+describe('the side a set was last studied with', () => {
+  it('is remembered per set and mode, and goes with the set', async () => {
+    const { setId } = await setWith(2);
+    const other = await setWith(2, 'French');
+    expect(await client.loadSide(setId, 'write')).toBeNull();
+
+    client.rememberSide(setId, 'write', 'definition');
+    client.rememberSide(other.setId, 'learn', 'definition');
+    expect(await client.loadSide(setId, 'write')).toBe('definition');
+    expect(await client.loadSide(setId, 'learn')).toBeNull();
+
+    client.rememberSide(setId, 'write', 'term');
+    expect(await client.loadSide(setId, 'write')).toBe('term');
+
+    await repo.deleteSet(setId);
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM study_sides WHERE set_id = ?').get(setId)).toEqual({ n: 0 });
+    expect(await client.loadSide(other.setId, 'learn')).toBe('definition');
+  });
+});

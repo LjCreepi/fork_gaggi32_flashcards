@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  switchSides,
+  advance,
   currentCard,
   dontKnow,
   isMatch,
@@ -344,3 +346,27 @@ describe('computeDiff', () => {
   });
 });
 
+describe('switching sides mid-round', () => {
+  const cards = [
+    { id: 1, term: 'Hund', definition: 'dog' },
+    { id: 2, term: 'Katze', definition: 'cat' },
+  ];
+
+  it('asks the current card from the other side and keeps the round', () => {
+    let s = startSession(cards, { answerWith: 'term', shuffled: false });
+    s = submitAnswer(s, 'Hund');
+    s = advance(s);
+    const switched = switchSides(s);
+    expect(switched.answerWith).toBe('definition');
+    expect(switched.index).toBe(s.index);
+    expect(switched.credits).toEqual(s.credits);
+    expect(submitAnswer(switched, 'cat').step.kind).toBe('correct');
+    expect(switchSides(switched).answerWith).toBe('term');
+  });
+
+  it('waits while a verdict is showing', () => {
+    const s = submitAnswer(startSession(cards, { answerWith: 'term', shuffled: false }), 'Fisch');
+    expect(s.step.kind).toBe('reveal');
+    expect(switchSides(s)).toBe(s);
+  });
+});

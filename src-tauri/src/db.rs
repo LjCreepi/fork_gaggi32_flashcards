@@ -25,6 +25,7 @@ const MIGRATIONS: &[&str] = &[
     // Also read by the TypeScript tests (src/lib/store/testDb.ts).
     include_str!("../schema/001_init.sql"),
     include_str!("../schema/002_study_sessions.sql"),
+    include_str!("../schema/003_study_sides.sql"),
 ];
 
 pub struct Db(pub Arc<Mutex<Connection>>);
@@ -92,7 +93,7 @@ pub fn check_sql(sql: &str) -> Result<(), String> {
 /// the app's own tables. Schema changes, ATTACH, PRAGMA and anything else are
 /// refused by SQLite itself while it compiles the statement, so this holds no
 /// matter how the SQL text is spelled.
-const APP_TABLES: &[&str] = &["sets", "cards", "progress", "reviews", "study_sessions"];
+const APP_TABLES: &[&str] = &["sets", "cards", "progress", "reviews", "study_sessions", "study_sides"];
 
 fn ui_authorizer(ctx: AuthContext<'_>) -> Authorization {
     let own = |t: &str| APP_TABLES.contains(&t);

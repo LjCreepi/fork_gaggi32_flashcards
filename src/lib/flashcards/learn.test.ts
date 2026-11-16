@@ -21,6 +21,7 @@ import {
   showHint,
   startLearn,
   summarize,
+  switchSides,
   timeBudget,
   WRITTEN_MIX,
   type LearnSession,
@@ -340,5 +341,28 @@ describe('helpers', () => {
     expect(hintFor('cell wall')).toBe('c___ w___');
     expect(hintFor("Newton's 2nd law!")).toBe("N_____'s 2__ l__!");
     expect(hintFor('Österreich')).toBe('Ö_________');
+  });
+});
+
+describe('switching sides mid-session', () => {
+  it('asks the same card afresh from the other side, hint gone', () => {
+    const queue = POOL.map((c) => queued(c.id, null));
+    let s = startLearn(queue, POOL, 'term', NO_MIX);
+    s = showHint(s);
+    const card = currentCard(s)!;
+    const switched = switchSides(s, NO_MIX);
+    expect(switched.answerWith).toBe('definition');
+    expect(currentCard(switched)!.id).toBe(card.id);
+    expect(switched.step).toEqual({ kind: 'ask', hinted: false });
+    if (switched.question?.kind === 'choice') {
+      expect(switched.question.options.map((o) => o.id)).toContain(card.id);
+    }
+    const right = answerWritten(switched, card.definition, FAST);
+    expect(right.step.kind === 'correct' || switched.question?.kind === 'choice').toBe(true);
+  });
+
+  it('waits while a verdict is showing', () => {
+    const s = giveUp(startLearn(POOL.map((c) => queued(c.id, null)), POOL, 'term', NO_MIX));
+    expect(switchSides(s)).toBe(s);
   });
 });

@@ -32,7 +32,7 @@ import type {
   SetDTO,
   SetSummaryDTO,
 } from './types';
-import type { StudyCard, WriteSession } from './write';
+import type { AnswerWith, StudyCard, WriteSession } from './write';
 
 export { ApiError, errorMessage };
 
@@ -261,6 +261,18 @@ export function saveLearn(setId: number, session: LearnSession): void {
 
 export function clearSession(setId: number, mode: StudyMode): void {
   saveSession(setId, mode, null);
+}
+
+/** The side Write or Learn last asked for in this set: where a new round starts. */
+export function loadSide(setId: number, mode: 'write' | 'learn'): Promise<AnswerWith | null> {
+  return inOrder(() => read(() => repo.getSide(setId, mode)));
+}
+
+/** Remembers the side a round started on or was switched to, without waiting for it. */
+export function rememberSide(setId: number, mode: 'write' | 'learn', side: AnswerWith): void {
+  void inOrder(() => write(() => repo.saveSide(setId, mode, side))).catch(() => {
+    // Only a convenience: the next round starts on the term side instead.
+  });
 }
 
 let carried: Promise<void> | null = null;

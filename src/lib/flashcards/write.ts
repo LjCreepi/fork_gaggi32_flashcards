@@ -324,6 +324,18 @@ export function submitAnswer(session: WriteSession, given: string, check: Answer
   return miss(session, card, given);
 }
 
+export const otherSide = (side: AnswerWith): AnswerWith => (side === 'term' ? 'definition' : 'term');
+
+/**
+ * Answer with the other side from this card on. Only while a card is being
+ * asked: with a verdict showing, the answer on screen belongs to the old side.
+ * Nothing else changes: the round, the misses and the mastery carry on.
+ */
+export function switchSides(session: WriteSession): WriteSession {
+  if (session.step.kind !== 'ask' || !currentCard(session)) return session;
+  return { ...session, answerWith: otherSide(session.answerWith) };
+}
+
 export function dontKnow(session: WriteSession): WriteSession {
   const card = currentCard(session);
   if (!card || session.step.kind !== 'ask') return session;

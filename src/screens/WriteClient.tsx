@@ -1,8 +1,9 @@
 
 import Link from '@/components/Link';
-import { useEffect, useId, useRef, useState, useMemo } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, useMemo } from 'react';
 
-import { clearSession, errorMessage, loadWrite, saveWrite } from '@/lib/flashcards/client';
+import { clearSession, errorMessage, loadSide, loadWrite, rememberSide, saveWrite } from '@/lib/flashcards/client';
+import { SwitchSides } from '@/components/flashcards/SwitchSides';
 import { plural, promptSizeClass } from '@/lib/flashcards/format';
 import { AnswerLine, TypedLine } from '@/components/flashcards/AnswerDiff';
 import { computeDiff } from '@/lib/flashcards/diff';
@@ -24,6 +25,7 @@ import {
   startSession,
   submitAnswer,
   submitRetype,
+  switchSides,
   type AnswerWith,
   type WriteSession,
 } from '@/lib/flashcards/write';
@@ -91,9 +93,11 @@ function WriteMode({ set }: { set: SetDTO }) {
     let live = true;
     setLoaded(false);
     setLoadError(null);
-    loadWrite(set.id, set.cards)
-      .then((saved) => {
+    Promise.all([loadWrite(set.id, set.cards), loadSide(set.id, 'write')])
+      .then(([saved, side]) => {
         if (!live) return;
+        // A new round starts on the side this set was last studied with.
+        if (side) setAnswerWith(side);
         if (saved) {
           setSavedSession(saved);
           setAnswerWith(saved.answerWith);
@@ -119,8 +123,18 @@ function WriteMode({ set }: { set: SetDTO }) {
   function begin() {
     clearSession(set.id, 'write');
     setSavedSession(null);
+    rememberSide(set.id, 'write', answerWith);
     setSession(startSession(set.cards, { answerWith, shuffled }));
   }
+
+  const onSwitchSides = useCallback(() => {
+    if (!session) return;
+    const next = switchSides(session);
+    if (next === session) return;
+    setSession(next);
+    setAnswerWith(next.answerWith);
+    rememberSide(set.id, 'write', next.answerWith);
+  }, [session, set.id]);
 
   function resumeSaved() {
     if (savedSession) {
@@ -184,6 +198,7 @@ function WriteMode({ set }: { set: SetDTO }) {
     <Play
       session={session}
       setSession={setSession}
+      onSwitchSides={onSwitchSides}
       onReset={() => {
         clearSession(set.id, 'write');
         setSession(startSession(set.cards, { answerWith: session.answerWith, shuffled: session.shuffled }));
@@ -290,10 +305,13 @@ function Setup(props: {
 function Play({
   session,
   setSession,
+  onSwitchSides,
   onReset,
 }: {
   session: WriteSession;
   setSession: React.Dispatch<React.SetStateAction<WriteSession | null>>;
+  /** Answer with the other side from this card on. */
+  onSwitchSides: () => void;
   /** Write over from round 1, same settings. */
   onReset: () => void;
 }) {
@@ -396,6 +414,7 @@ function Play({
           {progress.missed}
         </span>
         <span className="fc-writebar__stat">{progress.remaining} left</span>
+        <SwitchSides answerWith={session.answerWith} enabled={step.kind === 'ask'} onSwitch={onSwitchSides} />
         <ResetButton
           question="reset write?"
           title="Start Write over from round 1: every card asked again, scores cleared"

@@ -41,7 +41,7 @@ import { DISTRACTOR_COUNT, pickDistractors } from './distractors';
 import { shuffle } from './shuffle';
 import { PASSING_QUALITY, type Quality } from './sm2';
 import type { LearnCardDTO } from './types';
-import { answerOf, isMatch, promptOf, type AnswerCheck, type AnswerWith, type StudyCard } from './write';
+import { answerOf, isMatch, otherSide, promptOf, type AnswerCheck, type AnswerWith, type StudyCard } from './write';
 
 export type Question =
   /** `options` is the answer card and its distractors, shuffled. */
@@ -304,6 +304,16 @@ export function showHint(session: LearnSession): LearnSession {
   const { step } = session;
   if (step.kind !== 'ask' || step.hinted || session.question?.kind !== 'written') return session;
   return { ...session, step: { kind: 'ask', hinted: true } };
+}
+
+/**
+ * Answer with the other side from this card on. The card is asked afresh,
+ * since multiple-choice options are picked for one side, and the hint goes.
+ * Only while a card is being asked; progress is per card, not per side.
+ */
+export function switchSides(session: LearnSession, random: () => number = Math.random): LearnSession {
+  if (session.step.kind !== 'ask' || !currentCard(session)) return session;
+  return ask({ ...session, answerWith: otherSide(session.answerWith) }, session.index, random);
 }
 
 /** "No idea": graded 0 on the spot, and the answer is shown. */
