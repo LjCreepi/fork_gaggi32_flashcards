@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::{Map, Value as Json};
@@ -48,6 +48,9 @@ struct AppState {
     /// the next.
     overlay_open: AtomicBool,
     overlay_gen: AtomicU64,
+    /// When the overlay was last opened, so a focus blip right after it
+    /// appears isn't taken for a click elsewhere (see [`OVERLAY_BLUR_GRACE`]).
+    overlay_opened_at: Mutex<Option<Instant>>,
     /// The overlay page's height and the zoom it is shown at.
     overlay_geom: Mutex<OverlayGeom>,
     hide_on_blur: AtomicBool,
@@ -221,11 +224,18 @@ fn fit_overlay(app: &AppHandle, win: &WebviewWindow, place: bool) {
 /// hidden anyway.
 const OVERLAY_CLOSE_GRACE: Duration = Duration::from_millis(600);
 
+/// How long after opening a lost focus doesn't count as a click elsewhere.
+/// Windows can hand focus back for a moment just after the overlay appears
+/// (a fullscreen game taking it back, WebView2 settling), and hiding on that
+/// played the exit where the user had asked for the overlay.
+const OVERLAY_BLUR_GRACE: Duration = Duration::from_millis(400);
+
 fn open_overlay(app: &AppHandle) {
     let Some(win) = app.get_webview_window(OVERLAY) else { return };
     let state = app.state::<AppState>();
     let gen = state.overlay_gen.fetch_add(1, Ordering::SeqCst) + 1;
     state.overlay_open.store(true, Ordering::SeqCst);
+    *state.overlay_opened_at.lock().unwrap() = Some(Instant::now());
     // Still visible means it is mid-exit: turn it around where it stands.
     if !win.is_visible().unwrap_or(false) {
         fit_overlay(app, &win, true);
@@ -263,8 +273,14 @@ fn finish_close(app: &AppHandle, gen: u64) {
     }
 }
 
+/// The hotkey: close the overlay only when it is up and in front. Up but not
+/// focused (behind a fullscreen app, or focus went elsewhere) brings it
+/// forward instead, so the press the user meant as "show it" never closes it.
 fn toggle_overlay(app: &AppHandle) {
-    if app.state::<AppState>().overlay_open.load(Ordering::SeqCst) {
+    let in_front = app
+        .get_webview_window(OVERLAY)
+        .is_some_and(|w| w.is_focused().unwrap_or(false));
+    if app.state::<AppState>().overlay_open.load(Ordering::SeqCst) && in_front {
         close_overlay(app);
     } else {
         open_overlay(app);
@@ -929,7 +945,18 @@ pub fn run() {
         .on_window_event(|window, event| match event {
             WindowEvent::Focused(false) if window.label() == OVERLAY => {
                 let state = window.state::<AppState>();
-                if state.hide_on_blur.load(Ordering::Relaxed) {
+                if !state.hide_on_blur.load(Ordering::Relaxed) {
+                    return;
+                }
+                let just_opened = state
+                    .overlay_opened_at
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|t| t.elapsed() < OVERLAY_BLUR_GRACE);
+                if just_opened {
+                    // A blip, not a click elsewhere: take the focus back.
+                    let _ = window.set_focus();
+                } else {
                     close_overlay(window.app_handle());
                 }
             }
@@ -961,6 +988,7 @@ pub fn run() {
                 settings: Mutex::new(prefs.clone()),
                 overlay_open: AtomicBool::new(false),
                 overlay_gen: AtomicU64::new(0),
+                overlay_opened_at: Mutex::new(None),
                 overlay_geom: Mutex::new(OverlayGeom { content_h: OVERLAY_H, zoom: 1.0 }),
                 http: reqwest::Client::builder()
                     .user_agent(concat!("Flashcards/", env!("CARGO_PKG_VERSION")))

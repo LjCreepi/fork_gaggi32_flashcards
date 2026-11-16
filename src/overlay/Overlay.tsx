@@ -164,21 +164,30 @@ function OverlayFrame() {
 
   // The main window saved a session (or changed cards) while this one was
   // hidden: start the screen afresh from what is saved when it opens again.
+  //
+  // Subscribed once, reading version and view through refs. Re-subscribing on
+  // every change left a gap (listen() is async) in which an "overlay-open"
+  // was lost, and since every answer saves a session that gap kept coming
+  // round: an open that landed in it left the panel playing its exit.
+  const versionNow = useRef(version);
+  versionNow.current = version;
+  const viewNow = useRef(view);
+  viewNow.current = view;
   useEffect(() => {
     const off = listen('overlay-open', () => {
-      if (syncedVersion.current !== version) {
-        syncedVersion.current = version;
+      if (syncedVersion.current !== versionNow.current) {
+        syncedVersion.current = versionNow.current;
         setResync((n) => n + 1);
       }
       closing.current = 0;
       setPhase('in');
       requestAnimationFrame(() => {
-        if (view === 'add') document.getElementById('qa-term')?.focus();
+        if (viewNow.current === 'add') document.getElementById('qa-term')?.focus();
         else (document.querySelector('.ov__embed input:not([readonly])') as HTMLInputElement | null)?.focus();
       });
     });
     return () => void off.then((f) => f());
-  }, [version, view]);
+  }, []);
 
   useEffect(() => {
     const off = listen<number>('overlay-close', (e) => {
