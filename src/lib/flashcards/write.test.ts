@@ -125,6 +125,32 @@ describe('isMatch', () => {
     expect(isMatch('si ¿ y tu', 'si y tu')).toBe(true);
   });
 
+  it('does not count a space next to a dot or quote mark, nor the mark', () => {
+    expect(isMatch('etw.angehen', 'etw. angehen')).toBe(true);
+    expect(isMatch('etw angehen', 'etw. angehen')).toBe(true);
+    expect(isMatch('z.B.', 'z. B.')).toBe(true);
+    expect(isMatch('z. B.', 'z.B.')).toBe(true);
+    expect(isMatch('zB', 'z. B.')).toBe(true);
+    expect(isMatch('Mr.Smith', 'Mr. Smith')).toBe(true);
+    expect(isMatch('U. S. A.', 'U.S.A.')).toBe(true);
+    expect(isMatch('USA', 'U.S.A.')).toBe(true);
+    expect(isMatch('er sagte"ja"', 'er sagte "ja"')).toBe(true);
+    // A gap without a mark is still a word gap.
+    expect(isMatch('etwangehen', 'etw angehen')).toBe(false);
+    expect(isMatch('3. 5', '3.5')).toBe(false);
+  });
+
+  it('counts what is typed in parentheses when the answer has some', () => {
+    expect(isMatch('Apfel (f)', 'Apfel (m)')).toBe(false);
+    expect(isMatch('déjeuner (àmidi)', 'déjeuner (à midi)')).toBe(false);
+    expect(isMatch('déjeuner àmidi', 'déjeuner (à midi)')).toBe(false);
+    expect(isMatch('déjeuner (à midi)', 'déjeuner (à midi)')).toBe(true);
+    expect(isMatch('déjeuner à midi', 'déjeuner (à midi)')).toBe(true);
+    expect(isMatch('déjeuner', 'déjeuner (à midi)')).toBe(true);
+    expect(isMatch('(go) run', '(to) run')).toBe(false);
+    expect(isMatch('die Mahlzeit(-en)', 'die Mahlzeit (-en)')).toBe(true);
+  });
+
   it('ignores first letter upper/lower case', () => {
     expect(isMatch('Apple', 'apple')).toBe(true);
     expect(isMatch('apple', 'Apple')).toBe(true);
@@ -184,6 +210,26 @@ describe('isMatch', () => {
     // but every item, not one of them
     expect(isMatch('bestimmen', 'bestimmen, festlegen')).toBe(false);
     expect(isMatch('bestimmen, bestimmen', 'bestimmen, festlegen')).toBe(false);
+  });
+
+  it('takes any one alternative in the easier check, and still all of them', () => {
+    expect(isMatch('Reaktion', 'Reaktion, Antwort', 'easier')).toBe(true);
+    expect(isMatch('Antwort', 'Reaktion, Antwort', 'easier')).toBe(true);
+    expect(isMatch('Antwort, Reaktion', 'Reaktion, Antwort', 'easier')).toBe(true);
+    expect(isMatch('le dîner', 'le dîner / souper', 'easier')).toBe(true);
+    expect(isMatch('Möhre', 'die Karotte / Möhre (-n)', 'easier')).toBe(true);
+    expect(isMatch('Möhre (-n)', 'die Karotte / Möhre (-n)', 'easier')).toBe(true);
+    // Still a real check: a wrong word, a slip, or more than was asked.
+    expect(isMatch('Reaktoin', 'Reaktion, Antwort', 'easier')).toBe(false);
+    expect(isMatch('Frage', 'Reaktion, Antwort', 'easier')).toBe(false);
+    expect(isMatch('Reaktion, Frage', 'Reaktion, Antwort', 'easier')).toBe(false);
+    // Commas inside a number or inside parentheses don't make alternatives.
+    expect(isMatch('1', '1,5', 'easier')).toBe(false);
+    expect(isMatch('Apfel', 'Apfel (m, f)', 'easier')).toBe(true);
+    expect(isMatch('m', 'Apfel (m, f)', 'easier')).toBe(false);
+    // The exact check is unchanged.
+    expect(isMatch('Reaktion', 'Reaktion, Antwort')).toBe(false);
+    expect(isMatch('Reaktion', 'Reaktion, Antwort', 'exact')).toBe(false);
   });
 
   it('is not fooled by an answer that is all punctuation', () => {
@@ -260,6 +306,36 @@ describe('computeDiff', () => {
     expect(lines('well - known', 'well-known').given).toBe('well{ }-{ }known');
     expect(lines('como estas', '¿Cómo estás?').expected).toBe('{¿}C+ó+mo est+á+s{?}');
     expect(lines('Apfal', 'Apfel (m)').expected).toBe('Apf+e+l{ (m)}');
+  });
+
+  it('marks the slip that made an answer wrong, also next to parentheses', () => {
+    const hard = (given: string, expected: string) =>
+      computeDiff(given, expected).filter((p) => (p.added || p.removed) && !p.soft);
+    expect(hard('torun', '(to) run').length).toBeGreaterThan(0);
+    expect(hard('sichmerken', 'sich (etwas) merken').length).toBeGreaterThan(0);
+    // ...and leaves alone what the check lets pass.
+    expect(lines('etw.angehn', 'etw. angehen').expected).toBe('etw.{ }angeh+e+n');
+  });
+
+  it('never calls an answer wrong without marking something', () => {
+    const pairs: [string, string][] = [
+      ['torun', '(to) run'], ['sich etwasmerken', 'sich (etwas) merken'], ['icecream', 'ice cream'],
+      ['rotblau', 'rot, blau'], ['l ami', "l'ami"], ['well known', 'well-known'], ['Apfel (f)', 'Apfel (m)'],
+      ['déjeuner (àmidi)', 'déjeuner (à midi)'], ['GutenMorgen!', 'Guten Morgen!'], ['3,5kg', '3,5 kg'],
+      ['Hola¿qué tal', 'Hola, ¿qué tal?'], ['ersie', 'er / sie'], ['bestimmen', 'bestimmen, festlegen'],
+    ];
+    for (const [given, expected] of pairs) {
+      expect(isMatch(given, expected), `${given} / ${expected}`).toBe(false);
+      const marked = computeDiff(given, expected).some((p) => (p.added || p.removed) && !p.soft);
+      expect(marked, `${given} / ${expected}`).toBe(true);
+    }
+  });
+
+  it('in the easier check, leaves the other alternatives unmarked', () => {
+    const parts = computeDiff('Reaktoin', 'Reaktion, Antwort', 'easier');
+    const hard = parts.filter((p) => (p.added || p.removed) && !p.soft).map((p) => p.value);
+    expect(hard.join('')).not.toContain('Antwort');
+    expect(hard.length).toBeGreaterThan(0);
   });
 
   it('copes with long answers', () => {

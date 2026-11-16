@@ -6,6 +6,7 @@ import { clearSession, errorMessage, loadWrite, saveWrite } from '@/lib/flashcar
 import { plural, promptSizeClass } from '@/lib/flashcards/format';
 import { AnswerLine, TypedLine } from '@/components/flashcards/AnswerDiff';
 import { computeDiff } from '@/lib/flashcards/diff';
+import { useSettings } from '@/lib/app/settings';
 import type { SetDTO } from '@/lib/flashcards/types';
 import {
   advance,
@@ -300,6 +301,7 @@ function Play({
   const [retypeWrong, setRetypeWrong] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
+  const check = useSettings().settings?.answerCheck ?? 'exact';
 
   const card = currentCard(session);
   const { step } = session;
@@ -347,8 +349,8 @@ function Play({
           e.preventDefault();
           if (!text.trim()) {
             setSession(skipRetype(session));
-          } else if (isMatch(text, expected)) {
-            setSession(submitRetype(session, text));
+          } else if (isMatch(text, expected, check)) {
+            setSession(submitRetype(session, text, check));
           } else {
             setRetypeWrong(true);
           }
@@ -357,10 +359,10 @@ function Play({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [step.kind, text, expected, session, setSession]);
+  }, [step.kind, text, expected, session, setSession, check]);
 
   if (!card) return null;
-  const diff = step.kind === 'reveal' && step.given !== null ? computeDiff(step.given, expected) : null;
+  const diff = step.kind === 'reveal' && step.given !== null ? computeDiff(step.given, expected, check) : null;
   // The box is only kept for the keyboard's sake while the verdict shows.
   const locked = step.kind === 'correct';
 
@@ -369,12 +371,12 @@ function Play({
     if (step.kind === 'correct') {
       setSession((s) => (s ? advance(s) : s));
     } else if (step.kind === 'ask') {
-      setSession(submitAnswer(session, text));
+      setSession(submitAnswer(session, text, check));
     } else if (step.kind === 'reveal') {
       if (!text.trim()) {
         setSession(skipRetype(session));
-      } else if (isMatch(text, expected)) {
-        setSession(submitRetype(session, text));
+      } else if (isMatch(text, expected, check)) {
+        setSession(submitRetype(session, text, check));
       } else {
         setRetypeWrong(true);
       }

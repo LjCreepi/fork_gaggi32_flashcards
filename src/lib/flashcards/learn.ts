@@ -41,7 +41,7 @@ import { DISTRACTOR_COUNT, pickDistractors } from './distractors';
 import { shuffle } from './shuffle';
 import { PASSING_QUALITY, type Quality } from './sm2';
 import type { LearnCardDTO } from './types';
-import { answerOf, isMatch, promptOf, type AnswerWith, type StudyCard } from './write';
+import { answerOf, isMatch, promptOf, type AnswerCheck, type AnswerWith, type StudyCard } from './write';
 
 export type Question =
   /** `options` is the answer card and its distractors, shuffled. */
@@ -275,7 +275,12 @@ export function answerChoice(
   };
 }
 
-export function answerWritten(session: LearnSession, text: string, elapsedMs: number): LearnSession {
+export function answerWritten(
+  session: LearnSession,
+  text: string,
+  elapsedMs: number,
+  check: AnswerCheck = 'exact',
+): LearnSession {
   const card = currentCard(session);
   const { question, step } = session;
   // An empty submit is not an answer. The page turns an empty Enter into
@@ -284,7 +289,7 @@ export function answerWritten(session: LearnSession, text: string, elapsedMs: nu
     return session;
   }
 
-  if (isMatch(text, answerOf(card, session.answerWith))) {
+  if (isMatch(text, answerOf(card, session.answerWith), check)) {
     const budget = timeBudget(card, question, session.answerWith);
     const quality = correctQuality(elapsedMs, budget, step.hinted);
     return { ...session, step: { kind: 'correct', given: text, quality, overridden: false } };

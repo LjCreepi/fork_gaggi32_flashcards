@@ -16,6 +16,8 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 export type OverlayFront = 'term' | 'definition' | 'mixed';
 export type ThemeChoice = 'system' | 'light' | 'dark';
 export type OverlaySize = 'small' | 'normal' | 'large';
+/** See AnswerCheck in flashcards/write.ts. */
+export type AnswerCheckChoice = 'exact' | 'easier';
 export type OverlayMode = 'cards' | 'write' | 'learn';
 
 export type Settings = {
@@ -26,6 +28,7 @@ export type Settings = {
   overlayHideOnBlur: boolean;
   overlayTopmostWatch: boolean;
   overlaySize: OverlaySize;
+  answerCheck: AnswerCheckChoice;
   reminders: boolean;
   reminderTime: string;
   theme: ThemeChoice;

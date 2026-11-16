@@ -9,6 +9,8 @@
 // inside a change is not worth breaking the change for. On a tie it takes the
 // earliest match, so a correct start stays a correct start.
 
+import { isMatch, type AnswerCheck } from './write';
+
 export type DiffPart = {
   /** The answer's text, or for a `removed` part, the typed text. */
   value: string;
@@ -125,8 +127,9 @@ const isWord = (c: string) => /[\p{L}\p{N}]/u.test(c);
 const isDigit = (c: string | undefined) => c !== undefined && c >= '0' && c <= '9';
 
 /**
- * Which letters of a string the check would not count if they were missing
- * or extra: the same leeway isMatch gives (see answerKey in write.ts).
+ * Which letters of a string the check would likely not count if they were
+ * missing or extra (see answerKey in write.ts). Only a first guess, used to
+ * cut a changed stretch into pieces; computeDiff asks isMatch about each.
  */
 function softMask(s: string[]): boolean[] {
   const first = s.findIndex(isWord);
@@ -180,12 +183,34 @@ function softMask(s: string[]): boolean[] {
   });
 }
 
-export function computeDiff(given: string, expected: string): DiffPart[] {
+/** Cut [from, to) where the mask changes, so soft and hard letters part. */
+function pieces(mask: boolean[], from: number, to: number): [number, number][] {
+  const out: [number, number][] = [];
+  let start = from;
+  for (let k = from + 1; k <= to; k++) {
+    if (k === to || mask[k] !== mask[start]) {
+      out.push([start, k]);
+      start = k;
+    }
+  }
+  return out;
+}
+
+/**
+ * The correction. Each stretch that differs is cut where softMask changes,
+ * and the check itself then says whether a piece counts: the answer with just
+ * that one difference applied is put to isMatch. So a mark always agrees with
+ * the verdict — softMask only decides where the pieces are cut. A wrong
+ * answer whose pieces would each pass alone (two slips that only together
+ * break it) has them all marked, so "wrong" never shows nothing wrong.
+ */
+export function computeDiff(given: string, expected: string, check: AnswerCheck = 'exact'): DiffPart[] {
   const a = Array.from(given.normalize('NFC'));
   const b = Array.from(expected.normalize('NFC'));
   const ops = align(a, b);
   const softA = softMask(a);
   const softB = softMask(b);
+  const counts = (variant: string[]) => !isMatch(variant.join(''), expected, check);
 
   const parts: DiffPart[] = [];
   let i = 0;
@@ -201,14 +226,24 @@ export function computeDiff(given: string, expected: string): DiffPart[] {
       i += len;
       j += len;
     } else if (op === 'D') {
-      const soft = softA.slice(i, i + len).every(Boolean);
-      parts.push({ value: a.slice(i, i + len).join(''), removed: true, ...(soft ? { soft } : {}) });
+      for (const [from, to] of pieces(softA, i, i + len)) {
+        const extra = a.slice(from, to);
+        const soft = !counts([...b.slice(0, j), ...extra, ...b.slice(j)]);
+        parts.push({ value: extra.join(''), removed: true, ...(soft ? { soft } : {}) });
+      }
       i += len;
     } else {
-      const soft = softB.slice(j, j + len).every(Boolean);
-      parts.push({ value: b.slice(j, j + len).join(''), added: true, ...(soft ? { soft } : {}) });
+      for (const [from, to] of pieces(softB, j, j + len)) {
+        const soft = !counts([...b.slice(0, from), ...b.slice(to)]);
+        parts.push({ value: b.slice(from, to).join(''), added: true, ...(soft ? { soft } : {}) });
+      }
       j += len;
     }
+  }
+
+  const changed = parts.filter((p) => p.added || p.removed);
+  if (changed.length > 0 && changed.every((p) => p.soft) && !isMatch(given, expected, check)) {
+    for (const p of changed) delete p.soft;
   }
   return parts;
 }

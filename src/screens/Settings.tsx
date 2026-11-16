@@ -333,6 +333,30 @@ export function SettingsScreen() {
         </p>
       </Section>
 
+      <Section title="answers">
+        <Row
+          label="Answers with alternatives"
+          hint={'For cards that list several answers with , ; or / between them, like "Reaktion, Antwort" or "gut / lecker".'}
+        >
+          <Choice
+            label="Answers with alternatives"
+            value={s.answerCheck ?? 'exact'}
+            onChange={(v) => patch({ answerCheck: v })}
+            options={[
+              ['exact', 'exact'],
+              ['easier', 'easier'],
+            ]}
+          />
+        </Row>
+        <p className="rt-small rt-ink-faint set-foot">
+          <strong>Exact:</strong> every alternative has to be typed, in any order. <strong>Easier:</strong> any one of
+          them is enough, and all of them still count. Both modes, in Write and Learn: case, extra spaces and sentence
+          marks (. ! ? „ &quot;) don&apos;t count, nor does a space next to a dot or quote mark (&quot;z.B.&quot; is
+          &quot;z. B.&quot;). Spelling, accents, hyphens, apostrophes and the space between two words do. What is in
+          brackets may be left out, but if you type it, it has to be right.
+        </p>
+      </Section>
+
       <Section title="reminders">
         <Row label="Remind me" hint="One notification, if you have not studied yet that day and cards are still to learn.">
           <Switch label="Remind me" on={s.reminders} onChange={(v) => patch({ reminders: v })} />

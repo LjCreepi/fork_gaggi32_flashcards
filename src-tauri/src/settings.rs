@@ -31,6 +31,10 @@ pub struct Settings {
     pub overlay_topmost_watch: bool,
     /// "small" | "normal" | "large", on top of the size that follows the screen.
     pub overlay_size: String,
+    // --- answers ---
+    /// "exact" | "easier": whether an answer listing alternatives ("a, b",
+    /// "a / b") needs every one typed, or any one of them.
+    pub answer_check: String,
     // --- reminders ---
     pub reminders: bool,
     /// "HH:MM", local time.
@@ -80,6 +84,7 @@ impl Default for Settings {
             overlay_hide_on_blur: true,
             overlay_topmost_watch: false,
             overlay_size: "normal".into(),
+            answer_check: "exact".into(),
             reminders: false,
             reminder_time: "18:00".into(),
             theme: "system".into(),
@@ -147,6 +152,7 @@ impl Settings {
         self.overlay_new_cards = self.overlay_new_cards.min(1000);
         self.overlay_front = one_of(&self.overlay_front, &["term", "definition", "mixed"], "term");
         self.overlay_size = one_of(&self.overlay_size, &["small", "normal", "large"], "normal");
+        self.answer_check = one_of(&self.answer_check, &["exact", "easier"], "exact");
         if !valid_time(&self.reminder_time) {
             self.reminder_time = d.reminder_time;
         }
@@ -289,6 +295,7 @@ mod tests {
             reminder_time: "25:99".into(),
             theme: "neon".into(),
             overlay_size: "huge".into(),
+            answer_check: "lenient".into(),
             ai_model: "rm -rf /".into(),
             hotkey: "   ".into(),
             ..Settings::default()
@@ -301,6 +308,7 @@ mod tests {
         assert_eq!(s.reminder_time, "18:00");
         assert_eq!(s.theme, "system");
         assert_eq!(s.overlay_size, "normal");
+        assert_eq!(s.answer_check, "exact");
         assert_eq!(s.ai_model, DEFAULT_MODEL);
         assert_eq!(s.hotkey, DEFAULT_HOTKEY);
     }

@@ -30,6 +30,14 @@ import { shuffle } from './shuffle';
 
 export type AnswerWith = 'term' | 'definition';
 
+/**
+ * How strict the check is with answers that list alternatives (split by
+ * , ; or /, e.g. "Reaktion, Antwort" or "gut / lecker"). "exact": every one
+ * has to be typed, in any order. "easier": any one of them is enough, and all
+ * of them still are. Everything else is the same in both.
+ */
+export type AnswerCheck = 'exact' | 'easier';
+
 export type StudyCard = { id: number; term: string; definition: string };
 
 export type Step =
@@ -147,9 +155,17 @@ const isMark = (c: string) => /[.!?¿¡"]/.test(c);
  * does a run of them. A list — items split by , ; or / — matches in any
  * order. Inside a number nothing is dropped or split: "3.5" is not "35", and
  * "1,5" is not "5,1".
+ *
+ * Between two words, a stretch of spaces and sentence marks with at least one
+ * mark in it ("z. B.", "Mr.Smith", 'sagte "ja"') becomes `markGap`: isMatch
+ * tries both a space and nothing, so the space next to a mark is as free as
+ * the mark itself ("z.B." and "z. B." and "z B", "USA" and "U.S.A."). A
+ * stretch of spaces alone is a word gap and always one space.
  */
-export function answerKey(value: string): string {
+export function answerKey(value: string, markGap: '' | ' ' = ' '): string {
   const s = normalizeAnswer(value);
+  const isGap = (k: number) =>
+    /\s/.test(s[k]) || (isMark(s[k]) && !(s[k] === '.' && isDigit(s[k - 1]) && isDigit(s[k + 1])));
   const items: string[] = [];
   let item = '';
   for (let i = 0; i < s.length; i++) {
@@ -160,12 +176,17 @@ export function answerKey(value: string): string {
       item = '';
     } else if (c === '.' && inNumber) {
       item += c;
-    } else if (/\s/.test(c)) {
-      // Kept only between two words; the marks dropped around it don't count.
-      let next = i + 1;
-      while (next < s.length && (/\s/.test(s[next]) || isMark(s[next]))) next++;
-      if (isWordChar(item[item.length - 1]) && isWordChar(s[next])) item += ' ';
-    } else if (!isMark(c)) {
+    } else if (isGap(i)) {
+      // A gap counts only between two words.
+      let end = i;
+      let marked = false;
+      while (end < s.length && isGap(end)) {
+        if (isMark(s[end])) marked = true;
+        end++;
+      }
+      if (isWordChar(item[item.length - 1]) && isWordChar(s[end])) item += marked ? markGap : ' ';
+      i = end - 1;
+    } else {
       item += c;
     }
   }
@@ -177,22 +198,63 @@ export function answerKey(value: string): string {
 }
 
 /**
- * The ways an answer may be written: as is, without the parenthesis marks
- * ("(to) run" as "to run"), and without what is in parentheses ("Apfel (m)"
- * as "Apfel") — that last one only when something is left, so "(noun)" still
- * has to be typed.
+ * The alternatives an answer lists: its parts split by , ; or /, but not
+ * inside parentheses or a number ("Apfel (m, f)", "1,5").
  */
-function answerForms(value: string): Set<string> {
-  const forms = new Set<string>();
-  for (const form of [value, stripParenChars(value), stripParens(value)]) {
-    const key = answerKey(form);
-    if (key !== '') forms.add(key);
+export function splitAlternatives(value: string): string[] {
+  const parts: string[] = [];
+  let part = '';
+  let depth = 0;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (c === '(') depth++;
+    else if (c === ')' && depth > 0) depth--;
+    const inNumber = isDigit(value[i - 1]) && isDigit(value[i + 1]);
+    if (depth === 0 && !inNumber && (c === ',' || c === ';' || c === '/')) {
+      parts.push(part);
+      part = '';
+    } else {
+      part += c;
+    }
   }
-  return forms;
+  parts.push(part);
+  return parts.map((p) => p.trim()).filter((p) => answerKey(p) !== '');
 }
 
-export function isMatch(given: string, expected: string): boolean {
-  const want = answerForms(expected);
+/** The keys of these texts, with a mark gap as a space and as nothing. */
+function keysOf(texts: string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const text of texts) {
+    for (const gap of [' ', ''] as const) {
+      const key = answerKey(text, gap);
+      if (key !== '') keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Whether `given` is `expected`. The answer may be written as is, without the
+ * parenthesis marks ("(to) run" as "to run"), or without what is in
+ * parentheses ("Apfel (m)" as "Apfel") — that last one only when something
+ * is left, so "(noun)" still has to be typed.
+ *
+ * What is typed in parentheses counts when the answer has parentheses of its
+ * own: it may be left out, but if it is typed it has to be right ("Apfel (f)"
+ * is not "Apfel (m)", and "déjeuner (àmidi)" is as wrong as "déjeuner
+ * àmidi"). Only when the answer has none is a typed note ignored ("casa (f)"
+ * for "casa").
+ */
+export function isMatch(given: string, expected: string, check: AnswerCheck = 'exact'): boolean {
+  if (check === 'easier') {
+    const alternatives = splitAlternatives(expected);
+    if (alternatives.length > 1 && alternatives.some((one) => matches(given, one))) return true;
+  }
+  return matches(given, expected);
+}
+
+function matches(given: string, expected: string): boolean {
+  const want = keysOf([expected, stripParenChars(expected), stripParens(expected)]);
 
   // An answer that is nothing but punctuation ("?", "...") has no key, and
   // would otherwise accept anything; compare those as typed instead.
@@ -201,10 +263,11 @@ export function isMatch(given: string, expected: string): boolean {
     return plain(expected) !== '' && plain(given) === plain(expected);
   }
 
-  // Any way of writing the answer, typed any way it may be written: a typed
-  // "(f)" after the word is the same leeway the card itself gets.
-  for (const form of answerForms(given)) {
-    if (want.has(form)) return true;
+  const answerHasNote = stripParens(expected) !== expected;
+  const typed = [given, stripParenChars(given)];
+  if (!answerHasNote) typed.push(stripParens(given));
+  for (const key of keysOf(typed)) {
+    if (want.has(key)) return true;
   }
   return false;
 }
@@ -245,13 +308,13 @@ export function currentCard(session: WriteSession): StudyCard | null {
   return session.cards.find((card) => card.id === id) ?? null;
 }
 
-export function submitAnswer(session: WriteSession, given: string): WriteSession {
+export function submitAnswer(session: WriteSession, given: string, check: AnswerCheck = 'exact'): WriteSession {
   const card = currentCard(session);
   // An empty submit is not an answer. The page turns an empty Enter into
   // dontKnow() itself, so the timing guard against a stray Enter lives there.
   if (!card || session.step.kind !== 'ask' || given.trim() === '') return session;
 
-  if (isMatch(given, answerOf(card, session.answerWith))) {
+  if (isMatch(given, answerOf(card, session.answerWith), check)) {
     return {
       ...session,
       step: { kind: 'correct', given, overridden: false },
@@ -293,10 +356,10 @@ export function overrideCorrect(session: WriteSession): WriteSession {
  * The retype after a miss. Returns the same session object when the text does
  * not match yet, which is how the screen knows to say so.
  */
-export function submitRetype(session: WriteSession, typed: string): WriteSession {
+export function submitRetype(session: WriteSession, typed: string, check: AnswerCheck = 'exact'): WriteSession {
   const card = currentCard(session);
   if (!card || session.step.kind !== 'reveal') return session;
-  if (!isMatch(typed, answerOf(card, session.answerWith))) return session;
+  if (!isMatch(typed, answerOf(card, session.answerWith), check)) return session;
 
   const credits = Math.max(session.credits[card.id] ?? 0, 1);
   return nextCard({ ...session, credits: { ...session.credits, [card.id]: credits } });

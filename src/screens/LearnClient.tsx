@@ -14,6 +14,7 @@ import {
 } from '@/lib/flashcards/client';
 import { AnswerLine, TypedLine } from '@/components/flashcards/AnswerDiff';
 import { computeDiff } from '@/lib/flashcards/diff';
+import { useSettings } from '@/lib/app/settings';
 import { MIN_CARDS_FOR_CHOICE } from '@/lib/flashcards/distractors';
 import { plural } from '@/lib/flashcards/format';
 import {
@@ -390,6 +391,7 @@ function Play({
   const inputRef = useRef<HTMLInputElement>(null);
   const inputId = useId();
   const continueRef = useRef<HTMLButtonElement>(null);
+  const check = useSettings().settings?.answerCheck ?? 'exact';
   const elapsed = useAnswerClock(session.index, session.step.kind === 'ask');
 
   const turn = currentTurn(session);
@@ -510,7 +512,7 @@ function Play({
       } else if (step.kind === 'miss') {
         if (document.activeElement !== inputRef.current) {
           e.preventDefault();
-          if (!text.trim() || isMatch(text, expected)) {
+          if (!text.trim() || isMatch(text, expected, check)) {
             leaveMiss();
           } else {
             setRetypeWrong(true);
@@ -520,10 +522,10 @@ function Play({
     }
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [step.kind, onContinue, leaveMiss, text, expected]);
+  }, [step.kind, onContinue, leaveMiss, text, expected, check]);
 
   if (!turn || !card || !question) return null;
-  const diff = step.kind === 'miss' && step.given !== null && question.kind === 'written' ? computeDiff(step.given, expected) : null;
+  const diff = step.kind === 'miss' && step.given !== null && question.kind === 'written' ? computeDiff(step.given, expected, check) : null;
   // The box is only kept for the keyboard's sake while "correct" shows.
   const locked = step.kind === 'correct';
   // On the way off a miss: waiting for the save, or stuck until it is retried.
@@ -534,11 +536,11 @@ function Play({
     if (step.kind === 'correct') {
       onContinue();
     } else if (step.kind === 'ask') {
-      apply(answerWritten(session, text, elapsed()));
+      apply(answerWritten(session, text, elapsed(), check));
     } else if (step.kind === 'miss') {
       if (!text.trim()) {
         leaveMiss();
-      } else if (isMatch(text, expected)) {
+      } else if (isMatch(text, expected, check)) {
         leaveMiss();
       } else {
         setRetypeWrong(true);
