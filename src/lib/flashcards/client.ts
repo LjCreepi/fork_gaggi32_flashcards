@@ -2,12 +2,25 @@
 // to the local store (lib/store).
 
 import { announceDataChange } from '@/lib/app/events';
-import { aiClearKey, aiKeyStatus, aiRequest, aiSetKey, getSettings } from '@/lib/app/native';
+import { aiClearKey, aiKeyStatus, aiRequest, aiSetKey, getSettings, markSessionsCarriedOver } from '@/lib/app/native';
 import { fetchAccountStatus } from '@/lib/openrouter/account';
 import type { AiKeyStatus } from '@/lib/openrouter/types';
 import { ApiError, asApiError, errorMessage } from '@/lib/store/errors';
 import * as repo from '@/lib/store/repo';
+import type { Deck } from './deck';
 import { generateCards as runGenerate } from './generate';
+import type { LearnSession } from './learn';
+import {
+  isLegacySessionKey,
+  legacySnapshots,
+  packDeck,
+  packLearn,
+  packWrite,
+  unpackDeck,
+  unpackLearn,
+  unpackWrite,
+  type StudyMode,
+} from './saved';
 import type { Quality } from './sm2';
 import type {
   CardDTO,
@@ -19,6 +32,7 @@ import type {
   SetDTO,
   SetSummaryDTO,
 } from './types';
+import type { StudyCard, WriteSession } from './write';
 
 export { ApiError, errorMessage };
 
@@ -64,22 +78,13 @@ export function updateSet(id: number, meta: Partial<SetMeta>): Promise<{ set: Se
 
 /**
  * Start Learn over for one set: every card new again, and Learn's half-done
- * session dropped (LearnClient saves it as fc-session-<id>; older ones had a
- * date on the end). Flashcards and Write rounds are left alone.
+ * session dropped. Flashcards and Write rounds are left alone. In line with
+ * this window's session saves, so one still on its way can't bring the
+ * session back.
  */
 export function resetLearnProgress(id: number): Promise<{ ok: true; reset: number }> {
-  return write(async () => {
-    const reset = await repo.resetProgress(id);
-    try {
-      for (let i = localStorage.length - 1; i >= 0; i--) {
-        const key = localStorage.key(i);
-        if (key && (key === `fc-session-${id}` || key.startsWith(`fc-session-${id}-`))) localStorage.removeItem(key);
-      }
-    } catch {
-      /* no storage: nothing saved to forget */
-    }
-    return { ok: true as const, reset };
-  });
+  known.delete(sessionKey(id, 'learn'));
+  return inOrder(() => write(async () => ({ ok: true as const, reset: await repo.resetProgress(id) })));
 }
 
 // --- folders ---
@@ -166,6 +171,139 @@ export function reviewBatch(
     ok: true as const,
     results: (await repo.reviewBatch(reviews, today)) as ReviewResults,
   }));
+}
+
+// --- study sessions ---
+//
+// Each mode's unfinished round per set is kept in the database (saved.ts has
+// the shapes), so it survives a restart and both windows carry on with the
+// same one. A screen saves on every change without waiting for it. This
+// window's session reads and writes run one after another, in the order they
+// were made, so a load always sees this window's last save; the other window
+// hears of each save through data-changed and reads the round afresh when it
+// comes back to the front.
+
+let pending: Promise<unknown> = Promise.resolve();
+
+function inOrder<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pending.then(() => fn());
+  pending = run.catch(() => {});
+  return run;
+}
+
+/**
+ * What this window last read or wrote per set and mode. A screen saves as it
+ * mounts; when that is what was just loaded, nothing is written, so the
+ * other window is not told of a change that never happened.
+ */
+const known = new Map<string, string>();
+const sessionKey = (setId: number, mode: StudyMode) => `${setId}:${mode}`;
+
+/** JSON with object keys sorted, so the same round always compares equal. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : v,
+  );
+}
+
+function saveSession(setId: number, mode: StudyMode, data: unknown): void {
+  const key = sessionKey(setId, mode);
+  const json = canonical(data);
+  if (data !== null && known.get(key) === json) return;
+  known.set(key, json);
+  void inOrder(() => write(() => repo.saveSession(setId, mode, data))).catch(() => {
+    // Not kept this time: the round goes on, and the next change saves it.
+    if (known.get(key) === json) known.delete(key);
+  });
+}
+
+function loadSession(setId: number, mode: StudyMode): Promise<unknown> {
+  return inOrder(async () => {
+    await carryOverSessions();
+    const data = await read(() => repo.getSession(setId, mode));
+    known.set(sessionKey(setId, mode), canonical(data));
+    return data;
+  });
+}
+
+/** Flashcards' saved round over the set's cards now, or null. */
+export async function loadDeck(setId: number, cardIds: number[]): Promise<Deck | null> {
+  return unpackDeck(await loadSession(setId, 'cards'), cardIds);
+}
+
+export function saveDeck(setId: number, deck: Deck): void {
+  saveSession(setId, 'cards', deck.done ? null : packDeck(deck));
+}
+
+/** Write's saved round over the set's cards now (in set order), or null. */
+export async function loadWrite(setId: number, cards: StudyCard[]): Promise<WriteSession | null> {
+  return unpackWrite(await loadSession(setId, 'write'), cards);
+}
+
+export function saveWrite(setId: number, session: WriteSession): void {
+  saveSession(setId, 'write', session.step.kind === 'summary' ? null : packWrite(session));
+}
+
+/** Learn's saved session over `queue` (learnQueue: the cards with their progress now), or null. */
+export async function loadLearn(
+  setId: number,
+  queue: LearnCardDTO[],
+  pool: StudyCard[],
+): Promise<LearnSession | null> {
+  return unpackLearn(await loadSession(setId, 'learn'), queue, pool);
+}
+
+export function saveLearn(setId: number, session: LearnSession): void {
+  saveSession(setId, 'learn', session.step.kind === 'summary' ? null : packLearn(session));
+}
+
+export function clearSession(setId: number, mode: StudyMode): void {
+  saveSession(setId, mode, null);
+}
+
+let carried: Promise<void> | null = null;
+
+/**
+ * Moves the rounds versions up to 0.1.14 kept in localStorage into the
+ * database, once: before this window's first session is read, so no screen
+ * starts afresh over a round still waiting to come across.
+ *
+ * Once is kept by a flag in settings.json (sessionsCarriedOver), set only
+ * after the rows are in. Removing the old keys is a localStorage write a
+ * killed webview can lose, so keys still there once the flag is set are only
+ * removed, never imported again: a round finished since stays finished.
+ * Both windows may run it before the flag is set; a round goes in only where
+ * the database has none for that set and mode, so that is harmless. A
+ * snapshot that can't be read is left in localStorage as it was.
+ */
+export function carryOverSessions(): Promise<void> {
+  carried ??= (async () => {
+    let entries: [string, string][];
+    try {
+      entries = Object.keys(localStorage)
+        .filter(isLegacySessionKey)
+        .map((key) => [key, localStorage.getItem(key) ?? '']);
+    } catch {
+      return; // no storage: nothing to carry over
+    }
+    const found = legacySnapshots(entries);
+    if (!(await getSettings()).sessionsCarriedOver) {
+      const rounds = found.flatMap((s) => (s.data === null ? [] : [{ setId: s.setId, mode: s.mode, data: s.data }]));
+      if ((await repo.importSessions(rounds)) > 0) announceDataChange();
+      await markSessionsCarriedOver();
+    }
+    try {
+      for (const s of found) for (const key of s.keys) localStorage.removeItem(key);
+    } catch {
+      /* removed next time; the rows are in, so nothing is taken twice */
+    }
+  })().catch((err: unknown) => {
+    carried = null; // try again with the next load
+    throw asApiError(err);
+  });
+  return carried;
 }
 
 // --- AI: generating cards, and the OpenRouter key that pays for it ---

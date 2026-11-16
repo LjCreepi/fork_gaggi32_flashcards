@@ -165,9 +165,10 @@ export async function deleteSet(id: number): Promise<void> {
 }
 
 /**
- * Forget what the set has learned: every card is new again. The review log
- * stays, so the streak and "answered today" are untouched. Returns how many
- * cards had progress.
+ * Forget what the set has learned: every card is new again, and Learn's
+ * unfinished session goes with it (the other modes' rounds stay). The review
+ * log stays, so the streak and "answered today" are untouched. Returns how
+ * many cards had progress.
  */
 export async function resetProgress(id: number): Promise<number> {
   const setId = parse(idField, id);
@@ -175,6 +176,7 @@ export async function resetProgress(id: number): Promise<number> {
   if (found.length === 0) throw notFound('set');
   const [res] = await db().batch([
     { sql: 'DELETE FROM progress WHERE card_id IN (SELECT id FROM cards WHERE set_id = ?)', params: [setId] },
+    { sql: "DELETE FROM study_sessions WHERE set_id = ? AND mode = 'learn'", params: [setId] },
   ]);
   return res.rowsAffected;
 }
@@ -544,6 +546,74 @@ export function streakFrom(daysDesc: string[], today: string): number {
     expect = step(expect);
   }
   return n;
+}
+
+// --- study sessions -----------------------------------------------------------------
+// Each mode's unfinished round per set, as JSON in the shapes of
+// lib/flashcards/saved.ts. The store only keeps it; saved.ts reads it.
+
+const modeField = z.enum(['cards', 'write', 'learn']);
+export type StudyMode = z.infer<typeof modeField>;
+
+/** Far above any real round (a 2000-card Learn session is ~100 kB). */
+const MAX_SESSION_CHARS = 2_000_000;
+
+function sessionJson(data: unknown): string {
+  const json = JSON.stringify(data);
+  if (json === undefined || json.length > MAX_SESSION_CHARS) throw invalid('session too large');
+  return json;
+}
+
+/** The saved round, parsed; null when there is none (or it is not JSON). */
+export async function getSession(setId: number, mode: StudyMode): Promise<unknown> {
+  const [row] = await db().select<{ data: string }>(
+    'SELECT data FROM study_sessions WHERE set_id = ? AND mode = ?',
+    [parse(idField, setId), parse(modeField, mode)],
+  );
+  if (!row) return null;
+  try {
+    return JSON.parse(row.data) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** Keeps the round, or with `data` null forgets it. A set deleted meanwhile keeps nothing. */
+export async function saveSession(setId: number, mode: StudyMode, data: unknown): Promise<void> {
+  const params = [parse(idField, setId), parse(modeField, mode)];
+  if (data === null) {
+    await db().batch([{ sql: 'DELETE FROM study_sessions WHERE set_id = ? AND mode = ?', params }]);
+    return;
+  }
+  await db().batch([
+    {
+      sql: `INSERT INTO study_sessions (set_id, mode, data, updated_at)
+            SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sets WHERE id = ?1)
+            ON CONFLICT (set_id, mode) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at`,
+      params: [...params, sessionJson(data), now()],
+    },
+  ]);
+}
+
+/**
+ * Rounds carried over from elsewhere (the 0.1.14 localStorage), in one
+ * transaction. Each goes in only where its set exists and has no round in
+ * that mode yet: what is already here wins. Returns how many went in.
+ */
+export async function importSessions(
+  sessions: { setId: number; mode: StudyMode; data: unknown }[],
+): Promise<number> {
+  if (sessions.length === 0) return 0;
+  const at = now();
+  const results = await db().batch(
+    sessions.map((s) => ({
+      sql: `INSERT INTO study_sessions (set_id, mode, data, updated_at)
+            SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sets WHERE id = ?1)
+            ON CONFLICT (set_id, mode) DO NOTHING`,
+      params: [parse(idField, s.setId), parse(modeField, s.mode), sessionJson(s.data), at],
+    })),
+  );
+  return results.reduce((n, r) => n + r.rowsAffected, 0);
 }
 
 // --- quick add (overlay) ------------------------------------------------------------

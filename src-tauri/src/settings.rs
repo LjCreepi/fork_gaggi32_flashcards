@@ -63,6 +63,11 @@ pub struct Settings {
     /// Set once the study choices older versions kept in the webview's
     /// localStorage have been taken over ([`Settings::adopt`]).
     pub local_prefs_adopted: bool,
+    /// Set once the study sessions older versions kept in localStorage have
+    /// gone into the database. Keeping it here, not in localStorage, matters:
+    /// removing the old keys is itself a localStorage write a killed webview
+    /// can lose, and a round finished since must not come back from them.
+    pub sessions_carried_over: bool,
 }
 
 impl Default for Settings {
@@ -89,6 +94,7 @@ impl Default for Settings {
             special_keys: true,
             cards_first_side: "term".into(),
             local_prefs_adopted: false,
+            sessions_carried_over: false,
         }
     }
 }
@@ -165,6 +171,7 @@ impl Settings {
         self.special_keys = prev.special_keys;
         self.cards_first_side = prev.cards_first_side.clone();
         self.local_prefs_adopted = prev.local_prefs_adopted;
+        self.sessions_carried_over = prev.sessions_carried_over;
     }
 
     pub fn with(mut self, pref: StudyPref) -> Self {
@@ -343,6 +350,7 @@ mod tests {
         assert!(old.special_keys);
         assert_eq!(old.cards_first_side, "term");
         assert!(!old.local_prefs_adopted);
+        assert!(!old.sessions_carried_over);
 
         let pref = |json: &str| serde_json::from_str::<StudyPref>(json).unwrap();
         let s = Settings::default()
@@ -377,11 +385,15 @@ mod tests {
             special_keys: false,
             cards_first_side: "definition".into(),
             local_prefs_adopted: true,
+            sessions_carried_over: true,
             autostart: Some(true),
             ..Settings::default()
         };
         let mut next = Settings { theme: "dark".into(), ..Settings::default() };
         next.keep_own_fields(&prev);
+        // A stale copy can't make the sessions be carried over again.
+        assert!(next.sessions_carried_over);
+        assert!(next.local_prefs_adopted);
         assert_eq!(next, Settings { theme: "dark".into(), ..prev });
     }
 

@@ -2,11 +2,11 @@
 // for the set you pick, in a compact frame, plus a quick-add form.
 //
 // It is the same session, not a copy: each mode keeps its place per set in
-// localStorage, which both windows share, so a round started in the main
-// window carries on here and the other way round. Answers go to the same
-// database. A window that was in the background picks up the other's changes
-// when it comes back (the overlay when the hotkey opens it, the main window
-// when it is focused). Links to the set page or the editor open the main
+// the database (study_sessions), which both windows share, so a round started
+// in the main window carries on here and the other way round. Answers go to
+// the same database. Every write is announced as a data change, and a window
+// that was in the background picks up the other's changes when it comes back
+// (the overlay when the hotkey opens it, the main window when it is focused). Links to the set page or the editor open the main
 // window. Esc or a click elsewhere hides the overlay.
 //
 // Showing and hiding are animated here, not by the OS: Rust shows the window
@@ -119,7 +119,6 @@ function OverlayFrame() {
   const [chosenSet, setChosenSet] = usePref('overlaySet');
   const [sets, setSets] = useState<SetSummaryDTO[] | null>(null);
   const [resync, setResync] = useState(0);
-  const stale = useRef(false);
   const syncedVersion = useRef(0);
   const [phase, setPhase] = useState<'gone' | 'in' | 'out'>('gone');
   /** The close being played, 0 when none. */
@@ -163,20 +162,11 @@ function OverlayFrame() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // The main window wrote a session (or changed cards) while this one was
+  // The main window saved a session (or changed cards) while this one was
   // hidden: start the screen afresh from what is saved when it opens again.
   useEffect(() => {
-    const onStorage = (e: StorageEvent) => {
-      if (e.key) stale.current = true;
-    };
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, []);
-
-  useEffect(() => {
     const off = listen('overlay-open', () => {
-      if (stale.current || syncedVersion.current !== version) {
-        stale.current = false;
+      if (syncedVersion.current !== version) {
         syncedVersion.current = version;
         setResync((n) => n + 1);
       }

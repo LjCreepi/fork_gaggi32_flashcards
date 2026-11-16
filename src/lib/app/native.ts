@@ -47,6 +47,8 @@ export type Settings = {
   cardsFirstSide: 'term' | 'definition';
   /** The choices older versions kept in localStorage have been taken over. */
   localPrefsAdopted: boolean;
+  /** The study sessions older versions kept in localStorage are in the database. */
+  sessionsCarriedOver: boolean;
 };
 
 export type StudyPrefs = Pick<Settings, 'overlaySet' | 'overlayMode' | 'specialKeys' | 'cardsFirstSide'>;
@@ -58,6 +60,8 @@ export const setStudyPref = <K extends keyof StudyPrefs>(key: K, value: StudyPre
   call<Settings>('set_study_pref', { pref: { key, value } });
 /** Hands Rust what an older version left in localStorage (main window only, once). */
 export const adoptLocalPrefs = (prefs: Partial<StudyPrefs>) => call<Settings>('adopt_local_prefs', { prefs });
+/** The old localStorage sessions are in the database: never import them again (either window). */
+export const markSessionsCarriedOver = () => call<Settings>('mark_sessions_carried_over');
 /** Turns the login item on or off and remembers it; resolves to whether the OS now has it on. */
 export const setAutostart = (on: boolean) => call<boolean>('set_autostart', { on });
 export const suspendHotkey = () => call<void>('suspend_hotkey');

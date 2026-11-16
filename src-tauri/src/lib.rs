@@ -627,6 +627,22 @@ fn adopt_local_prefs(
     Ok(next)
 }
 
+/// The study sessions versions up to 0.1.14 kept in localStorage are in the
+/// database now: the UI never imports them again. Either window may be the
+/// one that carried them over (whichever loaded a session first).
+#[tauri::command]
+fn mark_sessions_carried_over(app: AppHandle, state: State<'_, AppState>) -> Result<Settings, String> {
+    let prev = state.settings.lock().unwrap().clone();
+    if prev.sessions_carried_over {
+        return Ok(prev);
+    }
+    let next = Settings { sessions_carried_over: true, ..prev };
+    settings::store(&app, &next)?;
+    *state.settings.lock().unwrap() = next.clone();
+    let _ = app.emit("settings-changed", &next);
+    Ok(next)
+}
+
 /// Release the hotkey while the Settings recorder listens for a new one.
 #[tauri::command]
 fn suspend_hotkey(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
@@ -891,6 +907,7 @@ pub fn run() {
             set_autostart,
             set_study_pref,
             adopt_local_prefs,
+            mark_sessions_carried_over,
             suspend_hotkey,
             resume_hotkey,
             app_info,

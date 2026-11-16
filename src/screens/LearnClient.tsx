@@ -2,7 +2,16 @@
 import Link from '@/components/Link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 
-import { errorMessage, fetchLearnQueue, fetchLearnStats, resetLearnProgress, reviewCard } from '@/lib/flashcards/client';
+import {
+  clearSession,
+  errorMessage,
+  fetchLearnQueue,
+  fetchLearnStats,
+  loadLearn,
+  resetLearnProgress,
+  reviewCard,
+  saveLearn,
+} from '@/lib/flashcards/client';
 import { AnswerLine, TypedLine } from '@/components/flashcards/AnswerDiff';
 import { computeDiff } from '@/lib/flashcards/diff';
 import { MIN_CARDS_FOR_CHOICE } from '@/lib/flashcards/distractors';
@@ -91,67 +100,6 @@ type Today = { queue: LearnCardDTO[]; stats: LearnStatsDTO };
  */
 type Streaks = Map<number, number | null>;
 
-// --- session persistence ---
-
-/** localStorage key for a set's in-progress session. */
-function sessionStorageKey(setId: number) {
-  return `fc-session-${setId}`;
-}
-
-/**
- * Sessions used to be kept per day (`fc-session-<set>-<YYYY-MM-DD>`). A day's
- * unfinished session is still a session: the newest one becomes the set's,
- * and the dated keys are cleared.
- */
-function migrateDatedSessions(setId: number) {
-  try {
-    const prefix = `${sessionStorageKey(setId)}-`;
-    const dated = Object.keys(localStorage)
-      .filter((key) => key.startsWith(prefix) && /^\d{4}-\d{2}-\d{2}$/.test(key.slice(prefix.length)))
-      .sort();
-    if (dated.length === 0) return;
-    const newest = localStorage.getItem(dated[dated.length - 1]);
-    if (newest && localStorage.getItem(sessionStorageKey(setId)) === null) {
-      localStorage.setItem(sessionStorageKey(setId), newest);
-    }
-    for (const key of dated) localStorage.removeItem(key);
-  } catch {
-    // localStorage can be unavailable (private mode, quota, etc.) — silently ignore.
-  }
-}
-
-function saveSessionToStorage(setId: number, session: LearnSession) {
-  try {
-    // Never persist a summary step — that means the session is finished.
-    if (session.step.kind === 'summary') {
-      localStorage.removeItem(sessionStorageKey(setId));
-    } else {
-      localStorage.setItem(sessionStorageKey(setId), JSON.stringify(session));
-    }
-  } catch {
-    // localStorage can be unavailable (private mode, quota, etc.) — silently ignore.
-  }
-}
-
-function loadSessionFromStorage(setId: number): LearnSession | null {
-  try {
-    migrateDatedSessions(setId);
-    const raw = localStorage.getItem(sessionStorageKey(setId));
-    if (!raw) return null;
-    return JSON.parse(raw) as LearnSession;
-  } catch {
-    return null;
-  }
-}
-
-function clearSessionFromStorage(setId: number) {
-  try {
-    localStorage.removeItem(sessionStorageKey(setId));
-  } catch {
-    // ignore
-  }
-}
-
 function LearnMode({ set }: { set: SetDTO }) {
   const [today, setToday] = useState<Today | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -171,15 +119,16 @@ function LearnMode({ set }: { set: SetDTO }) {
     setSession(null);
     setSavedSession(null);
     Promise.all([fetchLearnQueue(set.id), fetchLearnStats(set.id)])
-      .then(([queue, stats]) => {
+      .then(async ([queue, stats]) => [queue, stats, await loadLearn(set.id, queue.cards, set.cards)] as const)
+      .then(([queue, stats, saved]) => {
         if (!live) return;
         streaks.current = new Map(
           queue.cards.map((card) => [card.id, card.progress?.repetitionNumber ?? null]),
         );
         setToday({ queue: queue.cards, stats: stats.stats });
-        // Check for a saved in-progress session.
-        const saved = loadSessionFromStorage(set.id);
-        if (saved && saved.step.kind !== 'summary') {
+        // A session in progress, saved by this window or the other one, over
+        // the cards as they are now.
+        if (saved) {
           setSavedSession(saved);
           // Carry straight on: the overlay and the main window share this
           // session, so switching between them should not stop at a prompt.
@@ -192,7 +141,7 @@ function LearnMode({ set }: { set: SetDTO }) {
     return () => {
       live = false;
     };
-  }, [set.id]);
+  }, [set]);
 
   useEffect(() => load(), [load]);
 
@@ -203,10 +152,10 @@ function LearnMode({ set }: { set: SetDTO }) {
     load();
   }
 
-  // Persist session to localStorage on every change.
+  // Kept on every change, without waiting for it.
   useEffect(() => {
     if (!session || !today) return;
-    saveSessionToStorage(set.id, session);
+    saveLearn(set.id, session);
   }, [session, set.id, today]);
 
   // The summary's learned count has to come from the server: the reviews just
@@ -257,7 +206,7 @@ function LearnMode({ set }: { set: SetDTO }) {
           if (savedSession) setSession(savedSession);
         }}
         onStart={() => {
-          clearSessionFromStorage(set.id);
+          clearSession(set.id, 'learn');
           setSession(startLearn(sessionOrder(today.queue), set.cards, answerWith));
         }}
         onReset={resetLearn}

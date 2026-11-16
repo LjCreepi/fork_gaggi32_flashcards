@@ -3,6 +3,7 @@ import Link from '@/components/Link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePref } from '@/lib/app/prefs';
+import { clearSession, errorMessage, loadDeck, saveDeck } from '@/lib/flashcards/client';
 import {
   currentId,
   mark,
@@ -47,7 +48,7 @@ export function FlashcardsClient({ setId }: { setId: number }) {
         </div>
       ) : (
         <StudyArea>
-          <Deck set={set} />
+          <SavedDeck set={set} />
         </StudyArea>
       )}
     </main>
@@ -90,61 +91,67 @@ function isTypingTarget(target: EventTarget | null): boolean {
   );
 }
 
-// --- deck session persistence ---
+// --- the saved round ---
 
-function deckStorageKey(setId: number) {
-  return `fc-deck-session-${setId}`;
-}
+/**
+ * The deck carries on from the round saved for this set (by this window or
+ * the other one), so it is read before the deck appears: starting a fresh
+ * round meanwhile would save over it.
+ */
+function SavedDeck({ set }: { set: SetDTO }) {
+  const [saved, setSaved] = useState<{ deck: DeckState | null } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
-function saveDeckToStorage(setId: number, deck: DeckState) {
-  try {
-    if (deck.done) {
-      localStorage.removeItem(deckStorageKey(setId));
-    } else {
-      localStorage.setItem(deckStorageKey(setId), JSON.stringify(deck));
-    }
-  } catch {}
-}
+  useEffect(() => {
+    let live = true;
+    setSaved(null);
+    setError(null);
+    loadDeck(
+      set.id,
+      set.cards.map((card) => card.id),
+    )
+      .then((deck) => live && setSaved({ deck }))
+      .catch((err: unknown) => live && setError(errorMessage(err, 'Could not load the round.')));
+    return () => {
+      live = false;
+    };
+  }, [set, attempt]);
 
-function loadDeckFromStorage(setId: number): DeckState | null {
-  try {
-    const raw = localStorage.getItem(deckStorageKey(setId));
-    if (!raw) return null;
-    return JSON.parse(raw) as DeckState;
-  } catch {
-    return null;
+  if (error) {
+    return (
+      <div className="rt-section">
+        <div className="rt-note rt-note--err">{error}</div>
+        <div className="rt-btnrow" style={{ marginTop: 16 }}>
+          <button type="button" className="rt-btn" onClick={() => setAttempt((n) => n + 1)}>
+            try again
+          </button>
+        </div>
+      </div>
+    );
   }
+  if (!saved) {
+    return (
+      <div className="fc-loading" aria-busy="true" aria-label="Loading the round">
+        <div className="fc-skel" style={{ height: 220 }} />
+      </div>
+    );
+  }
+  return <Deck set={set} saved={saved.deck} />;
 }
 
-function clearDeckFromStorage(setId: number) {
-  try {
-    localStorage.removeItem(deckStorageKey(setId));
-  } catch {}
-}
-
-function Deck({ set }: { set: SetDTO }) {
+function Deck({ set, saved }: { set: SetDTO; saved: DeckState | null }) {
   const cards = set.cards;
   const byId = useMemo(() => new Map(cards.map((card) => [card.id, card])), [cards]);
   const allIds = useCallback(() => cards.map((card) => card.id), [cards]);
 
-  const [deck, setDeck] = useState<DeckState>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = loadDeckFromStorage(set.id);
-      if (saved && !saved.done) {
-        const currentIds = new Set(cards.map((c) => c.id));
-        // Ensure saved deck cards belong to this set
-        const valid = saved.order.length > 0 && saved.order.every((id) => currentIds.has(id));
-        if (valid) return saved;
-      }
-    }
-    return startDeck(allIds(), false);
-  });
+  const [deck, setDeck] = useState<DeckState>(() => saved ?? startDeck(allIds(), false));
   const [flipped, setFlipped] = useState(false);
   const [firstSide, setFirstSide] = usePref('cardsFirstSide');
 
-  // Save deck changes to localStorage
+  // Kept on every change, without waiting for it.
   useEffect(() => {
-    saveDeckToStorage(set.id, deck);
+    saveDeck(set.id, deck);
   }, [deck, set.id]);
 
   const toggleFirstSide = useCallback(() => {
@@ -311,7 +318,7 @@ function Deck({ set }: { set: SetDTO }) {
   }
 
   function restart() {
-    clearDeckFromStorage(set.id);
+    clearSession(set.id, 'cards');
     setDeck((d) => startDeck(allIds(), d.shuffled));
     setFlipped(false);
   }

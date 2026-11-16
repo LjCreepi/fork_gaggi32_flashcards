@@ -2,6 +2,7 @@
 import Link from '@/components/Link';
 import { useEffect, useId, useRef, useState, useMemo } from 'react';
 
+import { clearSession, errorMessage, loadWrite, saveWrite } from '@/lib/flashcards/client';
 import { plural, promptSizeClass } from '@/lib/flashcards/format';
 import { AnswerLine, TypedLine } from '@/components/flashcards/AnswerDiff';
 import { computeDiff } from '@/lib/flashcards/diff';
@@ -73,72 +74,49 @@ export function WriteClient({ setId }: { setId: number }) {
   );
 }
 
-// --- session persistence ---
-
-function writeSessionStorageKey(setId: number) {
-  return `fc-write-session-${setId}`;
-}
-
-function saveWriteSessionToStorage(setId: number, session: WriteSession) {
-  try {
-    if (session.step.kind === 'summary') {
-      localStorage.removeItem(writeSessionStorageKey(setId));
-    } else {
-      localStorage.setItem(writeSessionStorageKey(setId), JSON.stringify(session));
-    }
-  } catch {}
-}
-
-function loadWriteSessionFromStorage(setId: number): WriteSession | null {
-  try {
-    const raw = localStorage.getItem(writeSessionStorageKey(setId));
-    if (!raw) return null;
-    return JSON.parse(raw) as WriteSession;
-  } catch {
-    return null;
-  }
-}
-
-function clearWriteSessionFromStorage(setId: number) {
-  try {
-    localStorage.removeItem(writeSessionStorageKey(setId));
-  } catch {}
-}
-
 function WriteMode({ set }: { set: SetDTO }) {
   const [answerWith, setAnswerWith] = useState<AnswerWith>('term');
   const [shuffled, setShuffled] = useState(true);
   const [session, setSession] = useState<WriteSession | null>(null);
   const [savedSession, setSavedSession] = useState<WriteSession | null>(null);
+  /** The saved round has been read (or found missing); until then nothing starts. */
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
-  // Check for saved session on mount
+  // The round saved for this set, by this window or the other one. Cards
+  // deleted since drop out of it; edited ones show their new text.
   useEffect(() => {
-    const saved = loadWriteSessionFromStorage(set.id);
-    if (saved && saved.step.kind !== 'summary') {
-      // Ensure the saved session matches the current cards in the set
-      const currentIds = new Set(set.cards.map((c) => c.id));
-      const valid = saved.cards.length === set.cards.length && saved.cards.every((c) => currentIds.has(c.id));
-      if (valid) {
-        setSavedSession(saved);
-        setAnswerWith(saved.answerWith);
-        setShuffled(saved.shuffled);
-        // Carry straight on: the overlay and the main window share this
-        // session, so switching between them should not stop at a prompt.
-        setSession(saved);
-      } else {
-        clearWriteSessionFromStorage(set.id);
-      }
-    }
-  }, [set.id, set.cards]);
+    let live = true;
+    setLoaded(false);
+    setLoadError(null);
+    loadWrite(set.id, set.cards)
+      .then((saved) => {
+        if (!live) return;
+        if (saved) {
+          setSavedSession(saved);
+          setAnswerWith(saved.answerWith);
+          setShuffled(saved.shuffled);
+          // Carry straight on: the overlay and the main window share this
+          // session, so switching between them should not stop at a prompt.
+          setSession(saved);
+        }
+        setLoaded(true);
+      })
+      .catch((err: unknown) => live && setLoadError(errorMessage(err, 'Could not load the round.')));
+    return () => {
+      live = false;
+    };
+  }, [set, attempt]);
 
-  // Persist session to localStorage on change
+  // Kept on every change, without waiting for it.
   useEffect(() => {
     if (!session) return;
-    saveWriteSessionToStorage(set.id, session);
+    saveWrite(set.id, session);
   }, [session, set.id]);
 
   function begin() {
-    clearWriteSessionFromStorage(set.id);
+    clearSession(set.id, 'write');
     setSavedSession(null);
     setSession(startSession(set.cards, { answerWith, shuffled }));
   }
@@ -147,6 +125,27 @@ function WriteMode({ set }: { set: SetDTO }) {
     if (savedSession) {
       setSession(savedSession);
     }
+  }
+
+  if (loadError) {
+    return (
+      <div className="rt-section">
+        <div className="rt-note rt-note--err">{loadError}</div>
+        <div className="rt-btnrow" style={{ marginTop: 16 }}>
+          <button type="button" className="rt-btn" onClick={() => setAttempt((n) => n + 1)}>
+            try again
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!loaded) {
+    return (
+      <div className="fc-loading" aria-busy="true" aria-label="Loading the round">
+        <div className="fc-skel" style={{ height: 220 }} />
+      </div>
+    );
   }
 
   if (!session) {
@@ -172,7 +171,7 @@ function WriteMode({ set }: { set: SetDTO }) {
         onNextRound={() => setSession(startNextRound(session))}
         onRestart={begin}
         onSettings={() => {
-          clearWriteSessionFromStorage(set.id);
+          clearSession(set.id, 'write');
           setSavedSession(null);
           setSession(null);
         }}
@@ -185,7 +184,7 @@ function WriteMode({ set }: { set: SetDTO }) {
       session={session}
       setSession={setSession}
       onReset={() => {
-        clearWriteSessionFromStorage(set.id);
+        clearSession(set.id, 'write');
         setSession(startSession(set.cards, { answerWith: session.answerWith, shuffled: session.shuffled }));
       }}
     />

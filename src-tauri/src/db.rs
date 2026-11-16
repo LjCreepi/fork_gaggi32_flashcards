@@ -24,6 +24,7 @@ pub const FILE: &str = "flashcards.db";
 const MIGRATIONS: &[&str] = &[
     // Also read by the TypeScript tests (src/lib/store/testDb.ts).
     include_str!("../schema/001_init.sql"),
+    include_str!("../schema/002_study_sessions.sql"),
 ];
 
 pub struct Db(pub Arc<Mutex<Connection>>);
@@ -91,7 +92,7 @@ pub fn check_sql(sql: &str) -> Result<(), String> {
 /// the app's own tables. Schema changes, ATTACH, PRAGMA and anything else are
 /// refused by SQLite itself while it compiles the statement, so this holds no
 /// matter how the SQL text is spelled.
-const APP_TABLES: &[&str] = &["sets", "cards", "progress", "reviews"];
+const APP_TABLES: &[&str] = &["sets", "cards", "progress", "reviews", "study_sessions"];
 
 fn ui_authorizer(ctx: AuthContext<'_>) -> Authorization {
     let own = |t: &str| APP_TABLES.contains(&t);
@@ -334,7 +335,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_a_set_takes_its_cards_and_progress() {
+    fn deleting_a_set_takes_its_cards_progress_and_sessions() {
         let mut conn = mem();
         batch(
             &mut conn,
@@ -342,11 +343,49 @@ mod tests {
                 Stmt { sql: "INSERT INTO sets (title, created_at, updated_at) VALUES ('A','n','n')".into(), params: vec![] },
                 Stmt { sql: "INSERT INTO cards (set_id, term, definition, created_at, updated_at) VALUES (1,'t','d','n','n')".into(), params: vec![] },
                 Stmt { sql: "INSERT INTO progress VALUES (1, 1, 2.5, 1, '2026-01-01', NULL)".into(), params: vec![] },
+                Stmt { sql: "INSERT INTO study_sessions VALUES (1, 'learn', '{}', 'n')".into(), params: vec![] },
                 Stmt { sql: "DELETE FROM sets WHERE id = 1".into(), params: vec![] },
             ],
         )
         .unwrap();
-        let n = select(&conn, "SELECT (SELECT COUNT(*) FROM cards) + (SELECT COUNT(*) FROM progress) AS n", &[]).unwrap();
+        let n = select(
+            &conn,
+            "SELECT (SELECT COUNT(*) FROM cards) + (SELECT COUNT(*) FROM progress) + (SELECT COUNT(*) FROM study_sessions) AS n",
+            &[],
+        )
+        .unwrap();
         assert_eq!(n[0]["n"], Json::from(0));
+    }
+
+    #[test]
+    fn the_ui_may_keep_a_session_per_set_and_mode() {
+        let mut conn = mem();
+        let save = |conn: &mut Connection, data: &str| {
+            batch(
+                conn,
+                &[Stmt {
+                    // As src/lib/store/repo.ts sends it (saveSession).
+                    sql: "INSERT INTO study_sessions (set_id, mode, data, updated_at)
+                          SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM sets WHERE id = ?1)
+                          ON CONFLICT (set_id, mode) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at"
+                        .into(),
+                    params: vec![Json::from(1), Json::from("write"), Json::from(data), Json::from("n")],
+                }],
+            )
+        };
+        save(&mut conn, "{}").unwrap();
+        assert!(select(&conn, "SELECT * FROM study_sessions", &[]).unwrap().is_empty(), "a session needs its set");
+        batch(&mut conn, &[Stmt { sql: "INSERT INTO sets (title, created_at, updated_at) VALUES ('A','n','n')".into(), params: vec![] }])
+            .unwrap();
+        save(&mut conn, r#"{"a":1}"#).unwrap();
+        save(&mut conn, r#"{"a":2}"#).unwrap();
+        let rows = select(&conn, "SELECT data FROM study_sessions", &[]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["data"], Json::from(r#"{"a":2}"#));
+        let bad_mode = batch(
+            &mut conn,
+            &[Stmt { sql: "INSERT INTO study_sessions VALUES (1, 'quiz', '{}', 'n')".into(), params: vec![] }],
+        );
+        assert!(bad_mode.is_err());
     }
 }

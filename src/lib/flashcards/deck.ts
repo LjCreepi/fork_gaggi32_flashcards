@@ -11,8 +11,9 @@
 //     missed, or never marked — makes up the next round's pile, until a round
 //     leaves none.
 //
-// Nothing here is saved: like write mode, a round is worth nothing once the tab
-// closes. Learn mode is the one that remembers a card across days.
+// The screen keeps the unfinished round (saved.ts), so it carries on after a
+// restart and in the other window; a card's mark lasts only for its round.
+// Learn mode is the one that remembers a card across days.
 
 import { shuffle } from './shuffle';
 
