@@ -3,6 +3,8 @@ import { ask } from '@/components/Dialogs';
 import Link from '@/components/Link';
 import { useRouter } from '@/lib/app/router';
 import { backFromSet } from '@/lib/app/setOrigin';
+import { exportFile } from '@/lib/app/native';
+import { exportSet, setFileName } from '@/lib/store/transfer';
 import { useState } from 'react';
 
 import { deleteSet, errorMessage } from '@/lib/flashcards/client';
@@ -22,6 +24,7 @@ export function SetClient({ setId }: { setId: number }) {
   const { set, error } = useSet(setId);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [shareNote, setShareNote] = useState<{ ok: boolean; text: string } | null>(null);
   // The page before the set, not always the sets list (see setOrigin.ts).
   const back = backFromSet(setId);
 
@@ -55,6 +58,24 @@ export function SetClient({ setId }: { setId: number }) {
     }
   }
 
+  /** Save this one set to a file to send: the cards, not your progress on them. */
+  async function share() {
+    if (!set) return;
+    setShareNote(null);
+    try {
+      const file = await exportSet(set.id);
+      const where = await exportFile(JSON.stringify(file, null, 1), setFileName(set.title));
+      if (where) {
+        setShareNote({
+          ok: true,
+          text: `Saved to ${where}. Send that file; in Flashcards it opens with "open shared set" on the sets page. Your study progress is not in it.`,
+        });
+      }
+    } catch (err) {
+      setShareNote({ ok: false, text: errorMessage(err, 'Could not save the set.') });
+    }
+  }
+
   return (
     <main className="rt-boot">
       <Link href={back.href} className="rt-backlink">
@@ -83,6 +104,15 @@ export function SetClient({ setId }: { setId: number }) {
               </Link>
               <button
                 type="button"
+                className="rt-btn rt-btn--sm"
+                onClick={() => void share()}
+                disabled={count === 0}
+                title={count === 0 ? 'Add cards before sharing the set' : 'Save this set to a file you can send'}
+              >
+                share…
+              </button>
+              <button
+                type="button"
                 className="rt-btn rt-btn--sm rt-btn--danger"
                 onClick={remove}
                 disabled={deleting}
@@ -95,6 +125,11 @@ export function SetClient({ setId }: { setId: number }) {
       </div>
 
       {set.description && <p className="fc-desc">{set.description}</p>}
+      {shareNote && (
+        <div className={`rt-note rt-note--${shareNote.ok ? 'ok' : 'err'}`} style={{ marginTop: 14 }}>
+          {shareNote.text}
+        </div>
+      )}
       {deleteError && (
         <div className="rt-note rt-note--err" style={{ marginTop: 14 }}>
           {deleteError}

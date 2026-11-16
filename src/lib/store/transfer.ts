@@ -1,4 +1,5 @@
-// Export and import: the whole collection as one JSON file.
+// Export and import: the whole collection as one JSON file, or one set to
+// send to someone (the same format, with one set in it).
 //
 // An import always adds: each set arrives as a new set, so importing twice
 // gives two copies rather than overwriting anything.
@@ -107,6 +108,40 @@ export async function exportAll(): Promise<ExportFile> {
   };
 }
 
+/**
+ * One set, to send to someone: its title, description and cards, without
+ * your study progress, folder or dates — those are yours, not the set's.
+ */
+export async function exportSet(setId: number): Promise<ExportFile> {
+  const [set] = await db().select<{ title: string; description: string | null }>(
+    'SELECT title, description FROM sets WHERE id = ?',
+    [setId],
+  );
+  if (!set) throw invalid('That set no longer exists.');
+  const cards = await db().select<{ term: string; definition: string; position: number }>(
+    'SELECT term, definition, position FROM cards WHERE set_id = ? ORDER BY position, id',
+    [setId],
+  );
+  return {
+    format: FORMAT,
+    version: FORMAT_VERSION,
+    exportedAt: new Date().toISOString(),
+    sets: [{ title: set.title, description: set.description, cards: cards.map((c, i) => ({ ...c, position: i })) }],
+  };
+}
+
+/** A file name for a set: its title in plain letters, e.g. "french-food.json". */
+export function setFileName(title: string): string {
+  const slug = title
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return `${slug || 'set'}.json`;
+}
+
 /** Text → validated export, or a 400 that says what is wrong. */
 export function parseExport(text: string): ExportFile {
   let json: unknown;
@@ -127,10 +162,14 @@ export function parseExport(text: string): ExportFile {
   return parsed.data;
 }
 
-export type ImportResult = { sets: number; cards: number; withProgress: number };
+export type ImportResult = { sets: number; cards: number; withProgress: number; setIds: number[] };
 
-/** Add every set in the file. Each set lands whole or not at all. */
-export async function importAll(file: ExportFile): Promise<ImportResult> {
+/**
+ * Add every set in the file. Each set lands whole or not at all. `folder`
+ * puts every one of them in that folder, whatever the file says (a set
+ * opened while a folder is showing goes there).
+ */
+export async function importAll(file: ExportFile, options: { folder?: string | null } = {}): Promise<ImportResult> {
   const [{ sets: haveSets, cards: haveCards }] = await db().select<{ sets: number; cards: number }>(
     'SELECT (SELECT COUNT(*) FROM sets) AS sets, (SELECT COUNT(*) FROM cards) AS cards',
   );
@@ -142,7 +181,7 @@ export async function importAll(file: ExportFile): Promise<ImportResult> {
     throw invalid(`That would make more than ${LIMITS.cardsPerUser.toLocaleString('en')} cards.`);
   }
 
-  const result: ImportResult = { sets: 0, cards: 0, withProgress: 0 };
+  const result: ImportResult = { sets: 0, cards: 0, withProgress: 0, setIds: [] };
   const t = new Date().toISOString();
   for (const set of file.sets) {
     // Positions are renumbered 0..n-1 in the file's order, so each card's
@@ -156,7 +195,7 @@ export async function importAll(file: ExportFile): Promise<ImportResult> {
         sql: `INSERT INTO sets (folder, title, description, in_overlay, created_at, updated_at)
               VALUES (?, ?, ?, ?, ?, ?)`,
         params: [
-          set.folder || null,
+          (options.folder !== undefined ? options.folder : set.folder) || null,
           set.title,
           set.description || null,
           set.inOverlay === false ? 0 : 1,
@@ -192,7 +231,8 @@ export async function importAll(file: ExportFile): Promise<ImportResult> {
       });
       result.withProgress++;
     });
-    await db().batch(statements);
+    const [inserted] = await db().batch(statements);
+    result.setIds.push(inserted.lastInsertId);
     result.sets++;
     result.cards += cards.length;
   }

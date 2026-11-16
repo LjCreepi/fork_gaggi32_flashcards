@@ -4,7 +4,7 @@ import { useDb } from './db';
 import { ApiError } from './errors';
 import * as repo from './repo';
 import { testDb } from './testDb';
-import { exportAll, importAll, parseExport, FORMAT } from './transfer';
+import { exportAll, exportSet, importAll, parseExport, setFileName, FORMAT } from './transfer';
 
 const TODAY = '2026-11-10';
 
@@ -152,8 +152,9 @@ describe('export and import', () => {
 
     useDb(testDb());
     const res = await importAll(parseExport(text));
-    expect(res).toEqual({ sets: 2, cards: 3, withProgress: 1 });
+    expect(res).toMatchObject({ sets: 2, cards: 3, withProgress: 1 });
     const sets = await repo.listSets();
+    expect([...res.setIds].sort()).toEqual(sets.map((s) => s.id).sort());
     expect(sets.map((s) => s.title).sort()).toEqual(['Empty', 'Spanish']);
     const spanish = sets.find((s) => s.title === 'Spanish')!;
     const queue = await repo.learnQueue(spanish.id);
@@ -170,5 +171,48 @@ describe('export and import', () => {
   it('still reads exports made before the format was renamed', () => {
     const old = JSON.stringify({ format: '404canvas-flashcards', version: 1, sets: [{ title: 'x', cards: [{ term: 'a', definition: 'b' }] }] });
     expect(parseExport(old).sets[0].title).toBe('x');
+  });
+});
+
+describe('sending one set', () => {
+  it('holds that set and its cards, not its progress, folder or dates', async () => {
+    const { set, cards } = await setWith(3, 'Französisch: Essen');
+    await setWith(2, 'other');
+    await repo.reviewCard(cards[0].id, 5, TODAY, null);
+    raw.prepare('UPDATE sets SET folder = ? WHERE id = ?').run('Schule', set.id);
+
+    const file = await exportSet(set.id);
+    expect(file.format).toBe(FORMAT);
+    expect(file.sets).toHaveLength(1);
+    const [only] = file.sets;
+    expect(only.title).toBe('Französisch: Essen');
+    expect(only.cards.map((c) => c.term)).toEqual(['t0', 't1', 't2']);
+    expect(only.cards.every((c) => c.progress === undefined)).toBe(true);
+    expect(only.folder).toBeUndefined();
+    expect(only.createdAt).toBeUndefined();
+  });
+
+  it('opens as a new set, in the folder showing, and says which', async () => {
+    const { set } = await setWith(2, 'Spanish');
+    const text = JSON.stringify(await exportSet(set.id));
+    const res = await importAll(parseExport(text), { folder: 'Von Lea' });
+    expect(res.setIds).toHaveLength(1);
+    expect(res.setIds[0]).not.toBe(set.id);
+    const copy = await repo.getSet(res.setIds[0]);
+    expect(copy.title).toBe('Spanish');
+    expect(copy.cards.map((c) => c.definition)).toEqual(['d0', 'd1']);
+    expect(raw.prepare('SELECT folder FROM sets WHERE id = ?').get(res.setIds[0])).toEqual({ folder: 'Von Lea' });
+    // Opening it twice gives two copies, never an overwrite.
+    const again = await importAll(parseExport(text));
+    expect(again.setIds[0]).not.toBe(res.setIds[0]);
+  });
+
+  it('names the file after the set', () => {
+    expect(setFileName('Französisch: Essen & Trinken')).toBe('franzosisch-essen-trinken.json');
+    expect(setFileName('???')).toBe('set.json');
+  });
+
+  it('refuses a set that is gone', async () => {
+    await expect(exportSet(999)).rejects.toThrow('no longer exists');
   });
 });

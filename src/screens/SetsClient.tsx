@@ -1,6 +1,10 @@
 
 import { ask } from '@/components/Dialogs';
 import Link from '@/components/Link';
+import { announceDataChange } from '@/lib/app/events';
+import { importFile } from '@/lib/app/native';
+import { useRouter } from '@/lib/app/router';
+import { importAll, parseExport } from '@/lib/store/transfer';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 
@@ -30,6 +34,7 @@ const SEARCH_FROM = 6;
  * browses, so a row is one link and nothing on it can be mis-clicked.
  */
 export function SetsClient() {
+  const router = useRouter();
   const [sets, setSets] = useState<SetSummaryDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // In the URL (?folder=), so coming back from a set opens the same folder.
@@ -107,12 +112,51 @@ export function SetsClient() {
 
   const newSetHref = folder ? `/flashcards/new?folder=${encodeURIComponent(folder)}` : '/flashcards/new';
 
+  /**
+   * A set someone sent (or any Flashcards export): added as new sets, into
+   * the folder showing, and opened when it is just one.
+   */
+  async function openShared() {
+    setError(null);
+    try {
+      const text = await importFile('json');
+      if (text === null) return;
+      const file = parseExport(text);
+      if (file.sets.length === 0) {
+        setError('That file has no sets in it.');
+        return;
+      }
+      if (file.sets.length > 1) {
+        const cards = file.sets.reduce((n, x) => n + x.cards.length, 0);
+        const yes = await ask.confirm(
+          `That file holds ${file.sets.length} sets with ${cards} cards. Add them all? Your sets stay as they are.`,
+          { ok: 'add them' },
+        );
+        if (!yes) return;
+      }
+      const res = await importAll(file, { folder });
+      announceDataChange();
+      if (res.setIds.length === 1) router.push(`/flashcards/${res.setIds[0]}`);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not open that file.'));
+    }
+  }
+
   return (
     <main>
       <div className="rt-pagehead fc-pagehead">
         <h1>your sets</h1>
         <div className="rt-btnrow">
-          <Link href="/flashcards/new?import=1" className="rt-btn rt-btn--sm">
+          <button
+            type="button"
+            className="rt-btn rt-btn--sm"
+            onClick={() => void openShared()}
+            title="Add a set someone sent you (a Flashcards .json file)"
+          >
+            <IconImport />
+            Open shared set
+          </button>
+          <Link href="/flashcards/new?import=1" className="rt-btn rt-btn--sm" title="Paste or load cards as text">
             <IconImport />
             Import
           </Link>
