@@ -1,6 +1,5 @@
 
 import Link from '@/components/Link';
-import { useSwitchKey } from '@/components/flashcards/SwitchSides';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { usePref } from '@/lib/app/prefs';
@@ -159,7 +158,6 @@ function Deck({ set, saved }: { set: SetDTO; saved: DeckState | null }) {
     setFirstSide(firstSide === 'term' ? 'definition' : 'term');
     setFlipped(false);
   }, [firstSide, setFirstSide]);
-  useSwitchKey(true, toggleFirstSide);
 
   const total = deck.order.length;
   const atEnd = deck.index === total - 1;
@@ -507,7 +505,7 @@ function Deck({ set, saved }: { set: SetDTO; saved: DeckState | null }) {
           type="button"
           className="rt-btn rt-btn--sm fc-toggle is-on"
           onClick={toggleFirstSide}
-          title="Switch whether term or definition is shown first (Ctrl+S)"
+          title="Switch whether term or definition is shown first"
         >
           {firstSide === 'term' ? 'Front: term' : 'Front: definition'}
         </button>

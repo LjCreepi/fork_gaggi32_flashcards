@@ -200,8 +200,11 @@ function WriteMode({ set }: { set: SetDTO }) {
       setSession={setSession}
       onSwitchSides={onSwitchSides}
       onReset={() => {
+        // Back to the setup screen, so a fresh round asks again which side to
+        // answer with (it starts on the one last used).
         clearSession(set.id, 'write');
-        setSession(startSession(set.cards, { answerWith: session.answerWith, shuffled: session.shuffled }));
+        setSavedSession(null);
+        setSession(null);
       }}
     />
   );
@@ -417,7 +420,7 @@ function Play({
         <SwitchSides answerWith={session.answerWith} enabled={step.kind === 'ask'} onSwitch={onSwitchSides} />
         <ResetButton
           question="reset write?"
-          title="Start Write over from round 1: every card asked again, scores cleared"
+          title="Start Write over: back to the start screen to pick the side, every card asked again, scores cleared"
           onReset={onReset}
         />
       </div>
