@@ -2,6 +2,7 @@
 import { ask } from '@/components/Dialogs';
 import Link from '@/components/Link';
 import { useRouter } from '@/lib/app/router';
+import { backFromSet } from '@/lib/app/setOrigin';
 import { useState } from 'react';
 
 import { deleteSet, errorMessage } from '@/lib/flashcards/client';
@@ -21,13 +22,15 @@ export function SetClient({ setId }: { setId: number }) {
   const { set, error } = useSet(setId);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // The page before the set, not always the sets list (see setOrigin.ts).
+  const back = backFromSet(setId);
 
   if (!set) {
     return (
       <main>
-        <Link href="/flashcards" className="rt-backlink">
+        <Link href={back.href} className="rt-backlink">
           <IconChevronLeft />
-          All sets
+          {back.label}
         </Link>
         <SetLoadState error={error} />
       </main>
@@ -45,7 +48,7 @@ export function SetClient({ setId }: { setId: number }) {
     setDeleteError(null);
     try {
       await deleteSet(set.id);
-      router.push('/flashcards');
+      router.push(back.href);
     } catch (err) {
       setDeleteError(errorMessage(err, 'Could not delete this set.'));
       setDeleting(false);
@@ -54,9 +57,9 @@ export function SetClient({ setId }: { setId: number }) {
 
   return (
     <main className="rt-boot">
-      <Link href="/flashcards" className="rt-backlink">
+      <Link href={back.href} className="rt-backlink">
         <IconChevronLeft />
-        All sets
+        {back.label}
       </Link>
 
       <div className="rt-pagehead">

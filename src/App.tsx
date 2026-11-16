@@ -12,6 +12,7 @@ import { IconCards } from '@/components/flashcards/FlashcardIcons';
 import { latestUpdate, onUpdate } from '@/lib/app/background';
 import { useDataVersion } from '@/lib/app/events';
 import { SettingsProvider, useSettings } from '@/lib/app/settings';
+import { useSetOrigins } from '@/lib/app/setOrigin';
 import type { UpdateInfo } from '@/lib/app/native';
 import { DEFAULT_MODEL } from '@/screens/Settings';
 import { FlashcardsClient } from '@/screens/FlashcardsClient';
@@ -51,6 +52,7 @@ function EditSet() {
 /** Rust's tray menu and the overlay ask for a screen with a `navigate` event. */
 function NavigationListener() {
   const navigate = useNavigate();
+  useSetOrigins();
   useEffect(() => {
     const off = listen<string>('navigate', (e) => {
       const route = e.payload;

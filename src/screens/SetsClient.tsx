@@ -2,6 +2,7 @@
 import { ask } from '@/components/Dialogs';
 import Link from '@/components/Link';
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 
 import { TodayPanel } from '@/components/TodayPanel';
 import { useDataVersion } from '@/lib/app/events';
@@ -31,7 +32,11 @@ const SEARCH_FROM = 6;
 export function SetsClient() {
   const [sets, setSets] = useState<SetSummaryDTO[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [folder, setFolder] = useState<string | null>(null);
+  // In the URL (?folder=), so coming back from a set opens the same folder.
+  const [params, setParams] = useSearchParams();
+  const folder = params.get('folder') || null;
+  const setFolder = (name: string | null) =>
+    setParams(name ? { folder: name } : {}, { replace: true });
   const [query, setQuery] = useState('');
   // Re-read when the overlay (the other window) studies or adds cards.
   const version = useDataVersion();
@@ -57,9 +62,11 @@ export function SetsClient() {
   }, [mine]);
 
   // A folder that was emptied (or renamed away) stops existing; fall back out.
+  // Only once the sets are in: before that every folder looks empty.
   useEffect(() => {
-    if (folder !== null && !folders.some((f) => f.name === folder)) setFolder(null);
-  }, [folder, folders]);
+    if (sets !== null && folder !== null && !folders.some((f) => f.name === folder)) setFolder(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sets, folder, folders]);
 
   // A search looks through every one of your sets, whichever folder it is in.
   const searching = query.trim() !== '';
