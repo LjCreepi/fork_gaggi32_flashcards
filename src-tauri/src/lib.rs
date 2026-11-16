@@ -60,6 +60,15 @@ struct AppState {
 
 // ---- windows ----------------------------------------------------------------
 
+/// WebView2 options for every window, the same for all of them: they share one
+/// WebView2 environment, which refuses windows asking for different options.
+/// wry's defaults, plus WebView2's occlusion throttling turned off: a panel
+/// shown over the main window was taken for covered and froze on the first
+/// frame of its entrance. Hidden windows are still throttled. Unused off
+/// Windows.
+const BROWSER_ARGS: &str =
+    "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows";
+
 /// The app's own pages only. In dev that is the Vite server; in a build it is
 /// Tauri's asset protocol (tauri://localhost on macOS, http(s)://tauri.localhost
 /// on Windows).
@@ -83,6 +92,7 @@ fn build_main(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .center()
         .visible(false)
         .disable_drag_drop_handler()
+        .additional_browser_args(BROWSER_ARGS)
         .on_navigation(|url| is_app_url(url))
         // No popups: window.open and target=_blank open nothing.
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
@@ -103,6 +113,7 @@ fn build_overlay(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .center()
         .visible(false)
         .disable_drag_drop_handler()
+        .additional_browser_args(BROWSER_ARGS)
         .on_navigation(|url| is_app_url(url))
         // No popups: window.open and target=_blank open nothing.
         .on_new_window(|_, _| tauri::webview::NewWindowResponse::Deny)
